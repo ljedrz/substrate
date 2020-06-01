@@ -30,6 +30,9 @@ use crate::offchain::{
 	HttpError,
 	HttpRequestId as RequestId,
 	HttpRequestStatus as RequestStatus,
+	IpfsRequest,
+	IpfsRequestId,
+	IpfsRequestStatus,
 	Timestamp,
 	StorageKind,
 	OpaqueNetworkState,
@@ -38,7 +41,7 @@ use crate::offchain::{
 };
 use parking_lot::RwLock;
 
-/// Pending request.
+/// Pending HTTP request.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PendingRequest {
 	/// HTTP method
@@ -61,14 +64,30 @@ pub struct PendingRequest {
 	pub response_headers: Vec<(String, String)>,
 }
 
+/// Pending IPFS request.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct IpfsPendingRequest {
+	/// Request body
+	pub body: Vec<u8>,
+	/// Has the request been sent already.
+	pub sent: bool,
+	/// Response body
+	pub response: Option<Vec<u8>>,
+	/// Number of bytes already read from the response body.
+	pub read: usize,
+}
+
 /// Internal state of the externalities.
 ///
 /// This can be used in tests to respond or assert stuff about interactions.
 #[derive(Debug, Default)]
 pub struct OffchainState {
-	/// A list of pending requests.
+	/// A list of pending HTTP requests.
 	pub requests: BTreeMap<RequestId, PendingRequest>,
 	expected_requests: BTreeMap<RequestId, PendingRequest>,
+	/// A list of pending IPFS requests.
+	pub ipfs_requests: BTreeMap<IpfsRequestId, IpfsPendingRequest>,
+	expected_ipfs_requests: BTreeMap<IpfsRequestId, IpfsPendingRequest>,
 	/// Persistent local storage
 	pub persistent_storage: InMemOffchainStorage,
 	/// Local storage
@@ -305,6 +324,34 @@ impl offchain::Externalities for TestOffchainExt {
 		} else {
 			Err(HttpError::IoError)
 		}
+	}
+
+	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
+        let mut state = self.0.write();
+        let id = IpfsRequestId(state.requests.len() as u16);
+        state.ipfs_requests.insert(id.clone(), IpfsPendingRequest {
+            ..Default::default()
+        });
+        Ok(id)
+    }
+
+	fn ipfs_response_wait(
+		&mut self,
+		ids: &[IpfsRequestId],
+		_deadline: Option<Timestamp>,
+	) -> Vec<IpfsRequestStatus> {
+		let state = self.0.read();
+
+		ids.iter().map(|id| match state.ipfs_requests.get(id) {
+			Some(req) if req.response.is_none() =>
+				panic!("No `response` provided for request with id: {:?}", id),
+			None => IpfsRequestStatus::Invalid,
+			_ => IpfsRequestStatus::Finished,
+		}).collect()
+	}
+
+	fn ipfs_process_block(&mut self) -> Result<(), ()> {
+        unimplemented!()
 	}
 }
 

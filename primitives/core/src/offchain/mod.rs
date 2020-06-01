@@ -256,6 +256,50 @@ impl Timestamp {
 	}
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByEnum)]
+#[cfg_attr(feature = "std", derive(Hash))]
+pub enum IpfsRequest {
+    Identity,
+    LocalRefs,
+}
+
+/// Opaque type for offchain ipfs requests.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByInner)]
+#[cfg_attr(feature = "std", derive(Hash))]
+pub struct IpfsRequestId(pub u16);
+
+/// An error enum returned by some ipfs methods.
+#[derive(Clone, Copy, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByEnum)]
+#[repr(C)]
+pub enum IpfsError {
+    /// The requested action couldn't been completed within a deadline.
+	DeadlineReached = 1,
+	/// There was an IO Error while processing the request.
+	IoError = 2,
+	/// The ID of the request is invalid in this context.
+	Invalid = 3,
+}
+
+/// Status of the HTTP request
+#[derive(Clone, Copy, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
+pub enum IpfsRequestStatus {
+	/// Deadline was reached while we waited for this request to finish.
+	///
+	/// Note the deadline is controlled by the calling part, it not necessarily
+	/// means that the request has timed out.
+	DeadlineReached,
+	/// An error has occurred during the request, for example a timeout or the
+	/// remote has closed our socket.
+	///
+	/// The request is now considered destroyed. To retry the request you need
+	/// to construct it again.
+	IoError,
+	/// The passed ID is invalid in this context.
+	Invalid,
+	/// The request has finished with given status code.
+	Finished,
+}
+
 /// Execution context extra capabilities.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
@@ -274,6 +318,8 @@ pub enum Capability {
 	OffchainWorkerDbRead = 32,
 	/// Access to offchain worker DB (writes).
 	OffchainWorkerDbWrite = 64,
+	/// Access to an IPFS node.
+	Ipfs = 128,
 }
 
 /// A set of capabilities
@@ -486,6 +532,19 @@ pub trait Externalities: Send {
 		buffer: &mut [u8],
 		deadline: Option<Timestamp>
 	) -> Result<usize, HttpError>;
+
+    /// Initiates an IPFS request.
+	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()>;
+
+    /// Block and wait for the responses for given requests.
+	fn ipfs_response_wait(
+		&mut self,
+		ids: &[IpfsRequestId],
+		deadline: Option<Timestamp>
+	) -> Vec<IpfsRequestStatus>;
+
+    /// Process an IPFS block.
+	fn ipfs_process_block(&mut self) -> Result<(), ()>;
 }
 
 impl<T: Externalities + ?Sized> Externalities for Box<T> {
@@ -559,6 +618,18 @@ impl<T: Externalities + ?Sized> Externalities for Box<T> {
 		deadline: Option<Timestamp>
 	) -> Result<usize, HttpError> {
 		(&mut **self).http_response_read_body(request_id, buffer, deadline)
+	}
+
+	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
+        (&mut **self).ipfs_request_start(request)
+	}
+
+	fn ipfs_response_wait(&mut self, ids: &[IpfsRequestId], deadline: Option<Timestamp>) -> Vec<IpfsRequestStatus> {
+		(&mut **self).ipfs_response_wait(ids, deadline)
+	}
+
+	fn ipfs_process_block(&mut self) -> Result<(), ()> {
+        (&mut **self).ipfs_process_block()
 	}
 }
 
@@ -672,6 +743,21 @@ impl<T: Externalities> Externalities for LimitedExternalities<T> {
 	) -> Result<usize, HttpError> {
 		self.check(Capability::Http, "http_response_read_body");
 		self.externalities.http_response_read_body(request_id, buffer, deadline)
+	}
+
+	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
+		self.check(Capability::Ipfs, "ipfs_request_start");
+		self.externalities.ipfs_request_start(request)
+	}
+
+	fn ipfs_response_wait(&mut self, ids: &[IpfsRequestId], deadline: Option<Timestamp>) -> Vec<IpfsRequestStatus> {
+		self.check(Capability::Ipfs, "ipfs_response_wait");
+		self.externalities.ipfs_response_wait(ids, deadline)
+	}
+
+	fn ipfs_process_block(&mut self) -> Result<(), ()> {
+        self.check(Capability::Ipfs, "ipfs_process_block");
+        self.externalities.ipfs_process_block()
 	}
 }
 

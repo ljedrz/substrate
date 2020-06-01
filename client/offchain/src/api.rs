@@ -22,18 +22,19 @@ use std::{
 };
 
 use sp_core::offchain::OffchainStorage;
-use futures::Future;
 use log::error;
 use sc_network::{PeerId, Multiaddr, NetworkStateInfo};
 use codec::{Encode, Decode};
 use sp_core::offchain::{
-	Externalities as OffchainExt, HttpRequestId, Timestamp, HttpRequestStatus, HttpError,
-	OpaqueNetworkState, OpaquePeerId, OpaqueMultiaddr, StorageKind,
+	Externalities as OffchainExt, HttpRequestId, Timestamp, HttpRequestStatus, HttpError, IpfsRequest,
+	IpfsRequestId, IpfsRequestStatus, OpaqueNetworkState, OpaquePeerId, OpaqueMultiaddr, StorageKind,
 };
 pub use sp_offchain::STORAGE_PREFIX;
 
 #[cfg(not(target_os = "unknown"))]
 mod http;
+
+mod ipfs;
 
 #[cfg(target_os = "unknown")]
 use http_dummy as http;
@@ -54,6 +55,8 @@ pub(crate) struct Api<Storage> {
 	is_validator: bool,
 	/// Everything HTTP-related is handled by a different struct.
 	http: http::HttpApi,
+	/// Everything IPFS-related is handled by a different struct.
+	ipfs: ipfs::IpfsApi,
 }
 
 fn unavailable_yet<R: Default>(name: &str) -> R {
@@ -172,6 +175,22 @@ impl<Storage: OffchainStorage> OffchainExt for Api<Storage> {
 	) -> Result<usize, HttpError> {
 		self.http.response_read_body(request_id, buffer, deadline)
 	}
+
+	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
+		self.ipfs.request_start(request)
+	}
+
+	fn ipfs_response_wait(
+        &mut self,
+        ids: &[IpfsRequestId],
+        deadline: Option<Timestamp>
+    ) -> Vec<IpfsRequestStatus> {
+        self.ipfs.response_wait(ids, deadline)
+    }
+
+	fn ipfs_process_block(&mut self) -> Result<(), ()> {
+        self.ipfs.process_block()
+	}
 }
 
 /// Information about the local node's network state.
@@ -245,6 +264,8 @@ impl TryFrom<OpaqueNetworkState> for NetworkState {
 pub(crate) struct AsyncApi {
 	/// Everything HTTP-related is handled by a different struct.
 	http: Option<http::HttpWorker>,
+	/// Everything IPFS-related is handled by a different struct.
+	ipfs: Option<ipfs::IpfsWorker>,
 }
 
 impl AsyncApi {
@@ -255,26 +276,30 @@ impl AsyncApi {
 		is_validator: bool,
 	) -> (Api<S>, AsyncApi) {
 		let (http_api, http_worker) = http::http();
+		let (ipfs_api, ipfs_worker) = ipfs::ipfs();
 
 		let api = Api {
 			db,
 			network_state,
 			is_validator,
 			http: http_api,
+			ipfs: ipfs_api,
 		};
 
 		let async_api = AsyncApi {
 			http: Some(http_worker),
+			ipfs: Some(ipfs_worker),
 		};
 
 		(api, async_api)
 	}
 
 	/// Run a processing task for the API
-	pub fn process(mut self) -> impl Future<Output = ()> {
+	pub async fn process(mut self) {
 		let http = self.http.take().expect("Take invoked only once.");
+		let ipfs = self.ipfs.take().expect("Take invoked only once.");
 
-		http
+        futures::join!(http, ipfs);
 	}
 }
 
