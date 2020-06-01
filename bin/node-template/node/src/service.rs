@@ -106,6 +106,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 	if config.offchain_worker.enabled {
 		sc_service::build_offchain_workers(
 			&config, backend.clone(), task_manager.spawn_handle(), client.clone(), network.clone(),
+			&mut task_manager.ipfs_rt,
 		);
 	}
 
@@ -278,6 +279,7 @@ pub fn new_light(config: Configuration) -> Result<TaskManager, ServiceError> {
 	if config.offchain_worker.enabled {
 		sc_service::build_offchain_workers(
 			&config, backend.clone(), task_manager.spawn_handle(), client.clone(), network.clone(),
+			&mut task_manager.ipfs_rt,
 		);
 	}
 

@@ -222,6 +222,8 @@ pub struct TaskManager {
 	/// terminates and gracefully shutdown. Also ends the parent `future()` if a child's essential
 	/// task fails.
 	children: Vec<TaskManager>,
+	/// The executor for Ipfs.
+	pub ipfs_rt: tokio::runtime::Runtime,
 }
 
 impl TaskManager {
@@ -258,6 +260,7 @@ impl TaskManager {
 			task_notifier,
 			completion_future,
 			children: Vec::new(),
+			ipfs_rt: tokio::runtime::Runtime::new().expect("couldn't start the IPFS runtime"),
 		})
 	}
 

@@ -417,6 +417,7 @@ pub fn build_offchain_workers<TBl, TBackend, TCl>(
 	spawn_handle: SpawnTaskHandle,
 	client: Arc<TCl>,
 	network: Arc<NetworkService<TBl, <TBl as BlockT>::Hash>>,
+	ipfs_rt: &mut tokio::runtime::Runtime,
 ) -> Option<Arc<sc_offchain::OffchainWorkers<TCl, TBackend::OffchainStorage, TBl>>>
 	where
 		TBl: BlockT, TBackend: sc_client_api::Backend<TBl>,
@@ -426,7 +427,7 @@ pub fn build_offchain_workers<TBl, TBackend, TCl>(
 {
 	let offchain_workers = match backend.offchain_storage() {
 		Some(db) => {
-			Some(Arc::new(sc_offchain::OffchainWorkers::new(client.clone(), db)))
+			Some(Arc::new(sc_offchain::OffchainWorkers::new(client.clone(), db, ipfs_rt)))
 		},
 		None => {
 			warn!("Offchain workers disabled, due to lack of offchain storage support in backend.");
