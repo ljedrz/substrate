@@ -9,8 +9,10 @@
 /// For more guidance on Substrate FRAME, see the example pallet
 /// https://github.com/paritytech/substrate/blob/master/frame/example/src/lib.rs
 
-use frame_support::{decl_module, decl_storage, decl_event, decl_error, dispatch};
+use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch};
 use frame_system::{self as system, ensure_signed};
+use sp_core::offchain::IpfsRequest;
+use sp_runtime::offchain::ipfs;
 
 #[cfg(test)]
 mod mock;
@@ -103,6 +105,17 @@ decl_module! {
 					Something::put(new);
 					Ok(())
 				},
+			}
+		}
+
+		fn offchain_worker(block_number: T::BlockNumber) {
+		    if block_number % 2.into() != 1.into() { return; }
+			let ipfs_request = ipfs::Request::new(IpfsRequest::LocalRefs).unwrap();
+			let resp = ipfs_request.wait();
+
+			match resp {
+                Ok(r) => debug::info!("IPFS request {:?} started", r),
+                Err(e) => debug::warn!("IPFS request creation failed: {:?}", e),
 			}
 		}
 	}
