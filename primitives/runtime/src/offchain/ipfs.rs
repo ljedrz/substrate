@@ -187,79 +187,10 @@ mod tests {
 		t.register_extension(OffchainExt::new(offchain));
 
 		t.execute_with(|| {
-			let request: Request = Request::get("http://localhost:1234");
-			let pending = request
-				.add_header("X-Auth", "hunter2")
-				.send()
-				.unwrap();
-			// make sure it's sent correctly
-			state.write().fulfill_pending_request(
-				0,
-				testing::PendingRequest {
-					method: "GET".into(),
-					uri: "http://localhost:1234".into(),
-					headers: vec![("X-Auth".into(), "hunter2".into())],
-					sent: true,
-					..Default::default()
-				},
-				b"1234".to_vec(),
-				None,
-			);
+			let request = Request::new(IpfsRequest::Identity).unwrap();
+			let response = request.wait();
 
-			// wait
-			let mut response = pending.wait().unwrap();
-
-			// then check the response
-			let mut headers = response.headers().into_iter();
-			assert_eq!(headers.current(), None);
-			assert_eq!(headers.next(), false);
-			assert_eq!(headers.current(), None);
-
-			let body = response.body();
-			assert_eq!(body.clone().collect::<Vec<_>>(), b"1234".to_vec());
-			assert_eq!(body.error(), &None);
-		})
-	}
-
-	#[test]
-	fn should_send_a_post_request() {
-		let (offchain, state) = testing::TestOffchainExt::new();
-		let mut t = TestExternalities::default();
-		t.register_extension(OffchainExt::new(offchain));
-
-		t.execute_with(|| {
-			let pending = Request::default()
-				.method(Method::Post)
-				.url("http://localhost:1234")
-				.body(vec![b"1234"])
-				.send()
-				.unwrap();
-			// make sure it's sent correctly
-			state.write().fulfill_pending_request(
-				0,
-				testing::PendingRequest {
-					method: "POST".into(),
-					uri: "http://localhost:1234".into(),
-					body: b"1234".to_vec(),
-					sent: true,
-					..Default::default()
-				},
-				b"1234".to_vec(),
-				Some(("Test".to_owned(), "Header".to_owned())),
-			);
-
-			// wait
-			let mut response = pending.wait().unwrap();
-
-			// then check the response
-			let mut headers = response.headers().into_iter();
-			assert_eq!(headers.current(), None);
-			assert_eq!(headers.next(), true);
-			assert_eq!(headers.current(), Some(("Test", "Header")));
-
-			let body = response.body();
-			assert_eq!(body.clone().collect::<Vec<_>>(), b"1234".to_vec());
-			assert_eq!(body.error(), &None);
+			assert!(response.is_ok());
 		})
 	}
 }

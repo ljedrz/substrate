@@ -309,6 +309,7 @@ impl<I: IpfsTypes> AsyncApi<I> {
 mod tests {
 	use super::*;
 	use std::{convert::{TryFrom, TryInto}, time::SystemTime};
+	use async_std::task;
 	use sc_client_db::offchain::LocalStorage;
 	use sc_network::PeerId;
 
@@ -324,14 +325,22 @@ mod tests {
 		}
 	}
 
-	fn offchain_api() -> (Api<LocalStorage>, AsyncApi) {
+	fn offchain_api() -> (Api<LocalStorage>, AsyncApi<::ipfs::TestTypes>) {
 		let _ = env_logger::try_init();
 		let db = LocalStorage::new_test();
 		let mock = Arc::new(MockNetworkStateInfo());
 
+		let options = ::ipfs::IpfsOptions::<::ipfs::TestTypes>::default();
+		let ipfs_node = task::block_on(async move {
+            let (ipfs, fut) = ::ipfs::UninitializedIpfs::new(options).await.start().await.unwrap();
+            task::spawn(fut);
+            ipfs
+        });
+
 		AsyncApi::new(
 			db,
 			mock,
+			ipfs_node,
 			false,
 		)
 	}

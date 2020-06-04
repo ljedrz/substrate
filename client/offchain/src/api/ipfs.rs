@@ -24,7 +24,6 @@
 //! The reason for this design is driven by the fact that IPFS requests should continue running
 //! in the background even if the runtime isn't actively calling any function.
 
-use async_std::task;
 use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
@@ -47,16 +46,7 @@ pub fn ipfs<I: ipfs::IpfsTypes>(ipfs_node: ipfs::Ipfs<I>) -> (IpfsApi, IpfsWorke
         next_id: IpfsRequestId(rand::random::<u16>() % 2000),
         requests: FnvHashMap::default(),
     };
-/*
-    let options = ipfs::IpfsOptions::<IpfsTypes>::default();
 
-    let ipfs_node = task::block_on(async move {
-        // Start daemon and initialize repo
-        let (ipfs, fut) = ipfs::UninitializedIpfs::new(options).await.start().await.unwrap();
-        task::spawn(fut);
-        ipfs
-    });
-*/
     let engine = IpfsWorker {
         to_api,
         from_api,
@@ -377,292 +367,34 @@ impl fmt::Debug for IpfsWorkerRequest {
 mod tests {
     use core::convert::Infallible;
     use crate::api::timestamp;
-    use super::http;
-    use sp_core::offchain::{IpfsError, IpfsRequestId, IpfsRequestStatus, Duration};
+    use super::ipfs;
+    use async_std::task;
+    use sp_core::offchain::{IpfsError, IpfsRequest, IpfsRequestId, IpfsRequestStatus, Duration};
     use futures::future;
 
-    // Returns an `IpfsApi` whose worker is ran in the background, and a `SocketAddr` to an HTTP
-    // server that runs in the background as well.
-    macro_rules! build_api_server {
-        () => {{
-            // We spawn quite a bit of HTTP servers here due to how async API
-            // works for offchain workers, so be sure to raise the FD limit
-            // (particularly useful for macOS where the default soft limit may
-            // not be enough).
-            fdlimit::raise_fd_limit();
+    fn ipfs_node() -> ipfs::Ipfs<ipfs::TestTypes> {
+        let options = ipfs::IpfsOptions::<ipfs::TestTypes>::default();
 
-            let (api, worker) = http();
-
-            let (addr_tx, addr_rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let mut rt = tokio::runtime::Runtime::new().unwrap();
-                let worker = rt.spawn(worker);
-                let server = rt.spawn(async move {
-                    let server = hyper::Server::bind(&"127.0.0.1:0".parse().unwrap())
-                        .serve(hyper::service::make_service_fn(|_| { async move {
-                            Ok::<_, Infallible>(hyper::service::service_fn(move |_req| async move {
-                                Ok::<_, Infallible>(
-                                    hyper::Response::new(hyper::Body::from("Hello World!"))
-                                )
-                            }))
-                        }}));
-                    let _ = addr_tx.send(server.local_addr());
-                    server.await.map_err(drop)
-                });
-                let _ = rt.block_on(future::join(worker, server));
-            });
-            (api, addr_rx.recv().unwrap())
-        }};
+        task::block_on(async move {
+            let (ipfs, fut) = ipfs::UninitializedIpfs::new(options).await.start().await.unwrap();
+            task::spawn(fut);
+            ipfs
+        })
     }
 
     #[test]
-    fn basic_localhost() {
+    fn basic_identity() {
         let deadline = timestamp::now().add(Duration::from_millis(10_000));
 
         // Performs an HTTP query to a background HTTP server.
 
-        let (mut api, addr) = build_api_server!();
+        let (mut api, engine) = ipfs(ipfs_node());
 
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[], Some(deadline)).unwrap();
+        let id = api.request_start(IpfsRequest::Identity).unwrap();
 
         match api.response_wait(&[id], Some(deadline))[0] {
-            IpfsRequestStatus::Finished(200) => {},
+            IpfsRequestStatus::Finished => {},
             v => panic!("Connecting to localhost failed: {:?}", v)
-        }
-
-        let headers = api.response_headers(id);
-        assert!(headers.iter().any(|(h, _)| h.eq_ignore_ascii_case(b"Date")));
-
-        let mut buf = vec![0; 2048];
-        let n = api.response_read_body(id, &mut buf, Some(deadline)).unwrap();
-        assert_eq!(&buf[..n], b"Hello World!");
-    }
-
-    #[test]
-    fn request_start_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-
-        match api.request_start("\0", &format!("http://{}", addr)) {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        match api.request_start("GET", "http://\0localhost") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-    }
-
-    #[test]
-    fn request_add_header_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-
-        match api.request_add_header(IpfsRequestId(0xdead), "Foo", "bar") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        match api.request_add_header(id, "\0", "bar") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        match api.request_add_header(id, "Foo", "\0") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_add_header(id, "Foo", "Bar").unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        match api.request_add_header(id, "Foo2", "Bar") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        api.response_headers(id);
-        match api.request_add_header(id, "Foo2", "Bar") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        api.response_read_body(id, &mut [], None).unwrap();
-        match api.request_add_header(id, "Foo2", "Bar") {
-            Err(()) => {}
-            Ok(_) => panic!()
-        };
-    }
-
-    #[test]
-    fn request_write_body_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-
-        match api.request_write_body(IpfsRequestId(0xdead), &[1, 2, 3], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        match api.request_write_body(IpfsRequestId(0xdead), &[], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.request_write_body(id, &[], None).unwrap();
-        match api.request_write_body(id, &[], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.request_write_body(id, &[], None).unwrap();
-        match api.request_write_body(id, &[1, 2, 3, 4], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.response_wait(&[id], None);
-        match api.request_write_body(id, &[], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[1, 2, 3, 4], None).unwrap();
-        api.response_wait(&[id], None);
-        match api.request_write_body(id, &[1, 2, 3, 4], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.response_headers(id);
-        match api.request_write_body(id, &[1, 2, 3, 4], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        api.response_headers(id);
-        match api.request_write_body(id, &[], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.response_read_body(id, &mut [], None).unwrap();
-        match api.request_write_body(id, &[1, 2, 3, 4], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.response_read_body(id, &mut [], None).unwrap();
-        match api.request_write_body(id, &[], None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        };
-    }
-
-    #[test]
-    fn response_headers_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-        assert_eq!(api.response_headers(IpfsRequestId(0xdead)), &[]);
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        assert_eq!(api.response_headers(id), &[]);
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_write_body(id, &[], None).unwrap();
-        while api.response_headers(id).is_empty() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        api.response_wait(&[id], None);
-        assert_ne!(api.response_headers(id), &[]);
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        let mut buf = [0; 128];
-        while api.response_read_body(id, &mut buf, None).unwrap() != 0 {}
-        assert_eq!(api.response_headers(id), &[]);
-    }
-
-    #[test]
-    fn response_header_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        assert_eq!(api.response_headers(id), &[]);
-
-        let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-        api.request_add_header(id, "Foo", "Bar").unwrap();
-        assert_eq!(api.response_headers(id), &[]);
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        api.request_add_header(id, "Foo", "Bar").unwrap();
-        api.request_write_body(id, &[], None).unwrap();
-        // Note: this test actually sends out the request, and is supposed to test a situation
-        // where we haven't received any response yet. This test can theoretically fail if the
-        // HTTP response comes back faster than the kernel schedules our thread, but that is highly
-        // unlikely.
-        assert_eq!(api.response_headers(id), &[]);
-    }
-
-    #[test]
-    fn response_read_body_invalid_call() {
-        let (mut api, addr) = build_api_server!();
-        let mut buf = [0; 512];
-
-        match api.response_read_body(IpfsRequestId(0xdead), &mut buf, None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        }
-
-        let id = api.request_start("GET", &format!("http://{}", addr)).unwrap();
-        while api.response_read_body(id, &mut buf, None).unwrap() != 0 {}
-        match api.response_read_body(id, &mut buf, None) {
-            Err(IpfsError::Invalid) => {}
-            _ => panic!()
-        }
-    }
-
-    #[test]
-    fn fuzzing() {
-        // Uses the API in random ways to try to trigger panics.
-        // Doesn't test some paths, such as waiting for multiple requests. Also doesn't test what
-        // happens if the server force-closes our socket.
-
-        let (mut api, addr) = build_api_server!();
-
-        for _ in 0..50 {
-            let id = api.request_start("POST", &format!("http://{}", addr)).unwrap();
-
-            for _ in 0..250 {
-                match rand::random::<u8>() % 6 {
-                    0 => { let _ = api.request_add_header(id, "Foo", "Bar"); }
-                    1 => { let _ = api.request_write_body(id, &[1, 2, 3, 4], None); }
-                    2 => { let _ = api.request_write_body(id, &[], None); }
-                    3 => { let _ = api.response_wait(&[id], None); }
-                    4 => { let _ = api.response_headers(id); }
-                    5 => {
-                        let mut buf = [0; 512];
-                        let _ = api.response_read_body(id, &mut buf, None);
-                    }
-                    6 ..= 255 => unreachable!()
-                }
-            }
         }
     }
 }

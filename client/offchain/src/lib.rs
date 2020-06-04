@@ -91,16 +91,17 @@ impl<Client, Storage, Block: traits::Block, I: ipfs::IpfsTypes> fmt::Debug for O
 	}
 }
 
-impl<Client, Storage, Block, I: ipfs::IpfsTypes> OffchainWorkers<
+impl<Client, Storage, Block, Ipfs> OffchainWorkers<
 	Client,
 	Storage,
 	Block,
-	I,
+	Ipfs,
 > where
 	Block: traits::Block,
 	Client: ProvideRuntimeApi<Block> + Send + Sync + 'static,
 	Client::Api: OffchainWorkerApi<Block>,
 	Storage: OffchainStorage + 'static,
+	Ipfs: ipfs::IpfsTypes
 {
 	/// Start the offchain workers after given block.
 	#[must_use]
@@ -230,7 +231,7 @@ mod tests {
 		let header = client.header(&BlockId::number(0)).unwrap().unwrap();
 
 		// when
-		let offchain = OffchainWorkers::new(client, db);
+		let offchain: OffchainWorkers<_, _, _, ::ipfs::TestTypes> = OffchainWorkers::new(client, db);
 		futures::executor::block_on(offchain.on_block_imported(&header, network_state, false));
 
 		// then
