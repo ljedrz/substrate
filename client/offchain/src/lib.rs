@@ -35,6 +35,7 @@
 
 use std::{fmt, marker::PhantomData, sync::Arc};
 
+use async_std::task;
 use parking_lot::Mutex;
 use threadpool::ThreadPool;
 use sp_api::{ApiExt, ProvideRuntimeApi};
@@ -49,39 +50,52 @@ mod api;
 pub use sp_offchain::{OffchainWorkerApi, STORAGE_PREFIX};
 
 /// An offchain workers manager.
-pub struct OffchainWorkers<Client, Storage, Block: traits::Block> {
+pub struct OffchainWorkers<Client, Storage, Block: traits::Block, I: ipfs::IpfsTypes> {
 	client: Arc<Client>,
 	db: Storage,
+	ipfs_node: ipfs::Ipfs<I>,
 	_block: PhantomData<Block>,
 	thread_pool: Mutex<ThreadPool>,
 }
 
-impl<Client, Storage, Block: traits::Block> OffchainWorkers<Client, Storage, Block> {
+impl<Client, Storage, Block: traits::Block, I: ipfs::IpfsTypes> OffchainWorkers<Client, Storage, Block, I> {
 	/// Creates new `OffchainWorkers`.
 	pub fn new(client: Arc<Client>, db: Storage) -> Self {
+        let options = ipfs::IpfsOptions::<I>::default();
+
+        let ipfs_node = task::block_on(async move {
+            // Start daemon and initialize repo
+            let (ipfs, fut) = ipfs::UninitializedIpfs::new(options).await.start().await.unwrap();
+            task::spawn(fut);
+            ipfs
+        });
+
 		Self {
 			client,
 			db,
+			ipfs_node,
 			_block: PhantomData,
 			thread_pool: Mutex::new(ThreadPool::new(num_cpus::get())),
 		}
 	}
 }
 
-impl<Client, Storage, Block: traits::Block> fmt::Debug for OffchainWorkers<
+impl<Client, Storage, Block: traits::Block, I: ipfs::IpfsTypes> fmt::Debug for OffchainWorkers<
 	Client,
 	Storage,
 	Block,
+	I,
 > {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		f.debug_tuple("OffchainWorkers").finish()
 	}
 }
 
-impl<Client, Storage, Block> OffchainWorkers<
+impl<Client, Storage, Block, I: ipfs::IpfsTypes> OffchainWorkers<
 	Client,
 	Storage,
 	Block,
+	I,
 > where
 	Block: traits::Block,
 	Client: ProvideRuntimeApi<Block> + Send + Sync + 'static,
@@ -118,6 +132,7 @@ impl<Client, Storage, Block> OffchainWorkers<
 			let (api, runner) = api::AsyncApi::new(
 				self.db.clone(),
 				network_state.clone(),
+				self.ipfs_node.clone(),
 				is_validator,
 			);
 			debug!("Spawning offchain workers at {:?}", at);

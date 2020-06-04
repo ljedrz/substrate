@@ -912,7 +912,8 @@ ServiceBuilder<
 		sc_offchain::OffchainWorkers<
 			Client<TBackend, TExec, TBl, TRtApi>,
 			TBackend::OffchainStorage,
-			TBl
+			TBl,
+			ipfs::TestTypes,
 		>,
 	>, Error>
 		where TExec: CallExecutor<TBl, Backend = TBackend>,

@@ -28,17 +28,14 @@ use async_std::task;
 use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
-//use ipfs::IpfsResponse;
 use ipfs::{Cid, Multiaddr, PublicKey};
 use log::{error, info};
 use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, Timestamp};
 use std::{fmt, pin::Pin, task::{Context, Poll}};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
 
-type IpfsTypes = ipfs::TestTypes;
-
 /// Creates a pair of [`IpfsApi`] and [`IpfsWorker`].
-pub fn ipfs() -> (IpfsApi, IpfsWorker) {
+pub fn ipfs<I: ipfs::IpfsTypes>(ipfs_node: ipfs::Ipfs<I>) -> (IpfsApi, IpfsWorker<I>) {
     let (to_worker, from_api) = tracing_unbounded("mpsc_ocw_to_ipfs_worker");
     let (to_api, from_worker) = tracing_unbounded("mpsc_ocw_to_ipfs_api");
 
@@ -50,7 +47,7 @@ pub fn ipfs() -> (IpfsApi, IpfsWorker) {
         next_id: IpfsRequestId(rand::random::<u16>() % 2000),
         requests: FnvHashMap::default(),
     };
-
+/*
     let options = ipfs::IpfsOptions::<IpfsTypes>::default();
 
     let ipfs_node = task::block_on(async move {
@@ -59,7 +56,7 @@ pub fn ipfs() -> (IpfsApi, IpfsWorker) {
         task::spawn(fut);
         ipfs
     });
-
+*/
     let engine = IpfsWorker {
         to_api,
         from_api,
@@ -265,13 +262,13 @@ enum WorkerToApi {
 }
 
 /// Must be continuously polled for the [`IpfsApi`] to properly work.
-pub struct IpfsWorker {
+pub struct IpfsWorker<I: ipfs::IpfsTypes> {
     /// Used to sends messages to the `IpfsApi`.
     to_api: TracingUnboundedSender<WorkerToApi>,
     /// Used to receive messages from the `IpfsApi`.
     from_api: TracingUnboundedReceiver<ApiToWorker>,
     /// The engine that runs IPFS requests.
-    ipfs_node: ipfs::Ipfs<IpfsTypes>,
+    ipfs_node: ipfs::Ipfs<I>,
     /// IPFS requests that are being worked on by the engine.
     requests: Vec<(IpfsRequestId, IpfsWorkerRequest)>,
 }
@@ -290,7 +287,7 @@ pub enum IpfsResponse {
     LocalRefs(Vec<Cid>),
 }
 
-async fn ipfs_request(ipfs: ipfs::Ipfs<IpfsTypes>, request: IpfsRequest) -> Result<IpfsResponse, ipfs::Error> {
+async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsResponse, ipfs::Error> {
     match request {
         IpfsRequest::Identity => {
             let (pk, addrs) = ipfs.identity2().await?;
@@ -300,7 +297,7 @@ async fn ipfs_request(ipfs: ipfs::Ipfs<IpfsTypes>, request: IpfsRequest) -> Resu
     }
 }
 
-impl Future for IpfsWorker {
+impl<I: ipfs::IpfsTypes> Future for IpfsWorker<I> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -357,7 +354,7 @@ impl Future for IpfsWorker {
     }
 }
 
-impl fmt::Debug for IpfsWorker {
+impl<I: ipfs::IpfsTypes> fmt::Debug for IpfsWorker<I> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_list()
             .entries(self.requests.iter())

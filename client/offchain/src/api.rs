@@ -21,6 +21,7 @@ use std::{
 	thread::sleep,
 };
 
+use ::ipfs::{Ipfs, IpfsTypes};
 use sp_core::offchain::OffchainStorage;
 use log::error;
 use sc_network::{PeerId, Multiaddr, NetworkStateInfo};
@@ -261,22 +262,23 @@ impl TryFrom<OpaqueNetworkState> for NetworkState {
 /// Offchain extensions implementation API
 ///
 /// This is the asynchronous processing part of the API.
-pub(crate) struct AsyncApi {
+pub(crate) struct AsyncApi<I: IpfsTypes> {
 	/// Everything HTTP-related is handled by a different struct.
 	http: Option<http::HttpWorker>,
 	/// Everything IPFS-related is handled by a different struct.
-	ipfs: Option<ipfs::IpfsWorker>,
+	ipfs: Option<ipfs::IpfsWorker<I>>,
 }
 
-impl AsyncApi {
+impl<I: IpfsTypes> AsyncApi<I> {
 	/// Creates new Offchain extensions API implementation  an the asynchronous processing part.
 	pub fn new<S: OffchainStorage>(
 		db: S,
 		network_state: Arc<dyn NetworkStateInfo + Send + Sync>,
+		ipfs_node: Ipfs<I>,
 		is_validator: bool,
-	) -> (Api<S>, AsyncApi) {
+	) -> (Api<S>, AsyncApi<I>) {
 		let (http_api, http_worker) = http::http();
-		let (ipfs_api, ipfs_worker) = ipfs::ipfs();
+		let (ipfs_api, ipfs_worker) = ipfs::ipfs(ipfs_node);
 
 		let api = Api {
 			db,
