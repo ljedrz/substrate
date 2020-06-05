@@ -937,13 +937,6 @@ pub trait Offchain {
 			.expect("ipfs_response_wait can be called only in the offchain worker context")
 			.ipfs_response_wait(ids, deadline)
 	}
-
-    /// Process an IPFS block.
-	fn ipfs_process_block(&mut self) -> Result<(), ()> {
-        self.extension::<OffchainExt>()
-			.expect("ipfs_process_block can be called only in the offchain worker context")
-			.ipfs_process_block()
-	}
 }
 
 /// Wasm only interface that provides functions for calling into the allocator.

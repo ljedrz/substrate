@@ -256,19 +256,22 @@ impl Timestamp {
 	}
 }
 
+/// A request that can be handled by an IPFS node.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByEnum)]
 #[cfg_attr(feature = "std", derive(Hash))]
 pub enum IpfsRequest {
+    /// The node's public key and dedicated external addresses.
     Identity,
+    /// The list of `Cid`s of blocks known to a node.
     LocalRefs,
 }
 
-/// Opaque type for offchain ipfs requests.
+/// Opaque type for offchain IPFS requests.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByInner)]
 #[cfg_attr(feature = "std", derive(Hash))]
 pub struct IpfsRequestId(pub u16);
 
-/// An error enum returned by some ipfs methods.
+/// An error enum returned by some IPFS methods.
 #[derive(Clone, Copy, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByEnum)]
 #[repr(C)]
 pub enum IpfsError {
@@ -542,9 +545,6 @@ pub trait Externalities: Send {
 		ids: &[IpfsRequestId],
 		deadline: Option<Timestamp>
 	) -> Vec<IpfsRequestStatus>;
-
-    /// Process an IPFS block.
-	fn ipfs_process_block(&mut self) -> Result<(), ()>;
 }
 
 impl<T: Externalities + ?Sized> Externalities for Box<T> {
@@ -626,10 +626,6 @@ impl<T: Externalities + ?Sized> Externalities for Box<T> {
 
 	fn ipfs_response_wait(&mut self, ids: &[IpfsRequestId], deadline: Option<Timestamp>) -> Vec<IpfsRequestStatus> {
 		(&mut **self).ipfs_response_wait(ids, deadline)
-	}
-
-	fn ipfs_process_block(&mut self) -> Result<(), ()> {
-        (&mut **self).ipfs_process_block()
 	}
 }
 
@@ -753,11 +749,6 @@ impl<T: Externalities> Externalities for LimitedExternalities<T> {
 	fn ipfs_response_wait(&mut self, ids: &[IpfsRequestId], deadline: Option<Timestamp>) -> Vec<IpfsRequestStatus> {
 		self.check(Capability::Ipfs, "ipfs_response_wait");
 		self.externalities.ipfs_response_wait(ids, deadline)
-	}
-
-	fn ipfs_process_block(&mut self) -> Result<(), ()> {
-        self.check(Capability::Ipfs, "ipfs_process_block");
-        self.externalities.ipfs_process_block()
 	}
 }
 

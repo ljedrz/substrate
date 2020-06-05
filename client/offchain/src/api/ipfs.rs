@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
 
-//! This module is composed of two structs: [`IpfsApi`] and [`IpfsWorker`]. Calling the [`http`]
+//! This module is composed of two structs: [`IpfsApi`] and [`IpfsWorker`]. Calling the [`ipfs`]
 //! function returns a pair of [`IpfsApi`] and [`IpfsWorker`] that share some state.
 //!
 //! The [`IpfsApi`] is (indirectly) passed to the runtime when calling an offchain worker, while
@@ -75,7 +75,6 @@ pub struct IpfsApi {
 
 /// One active request within `IpfsApi`.
 enum IpfsApiRequest {
-    NotDispatched(IpfsRequest),
     Dispatched,
     Response(IpfsResponse),
     Fail(ipfs::Error),
@@ -94,7 +93,7 @@ impl IpfsApi {
             }
         };
 
-        let _ = self.to_worker.unbounded_send(ApiToWorker::Dispatch {
+        let _ = self.to_worker.unbounded_send(ApiToWorker {
             id,
             request
         }).unwrap();
@@ -119,8 +118,6 @@ impl IpfsApi {
                 for id in ids {
                     output.push(match self.requests.get(id) {
                         None => IpfsRequestStatus::Invalid,
-                        Some(IpfsApiRequest::NotDispatched(_)) =>
-                        	unreachable!("we replaced all the NotDispatched with Dispatched earlier; qed"),
                         Some(IpfsApiRequest::Dispatched) => {
                             must_wait_more = true;
                             IpfsRequestStatus::DeadlineReached
@@ -193,10 +190,6 @@ impl IpfsApi {
             }
         }
     }
-
-    pub fn process_block(&mut self) -> Result<(), ()> {
-        Ok(())
-    }
 }
 
 impl fmt::Debug for IpfsApi {
@@ -210,8 +203,6 @@ impl fmt::Debug for IpfsApi {
 impl fmt::Debug for IpfsApiRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            IpfsApiRequest::NotDispatched(_) =>
-                f.debug_tuple("IpfsApiRequest::NotDispatched").finish(),
             IpfsApiRequest::Dispatched =>
                 f.debug_tuple("IpfsApiRequest::Dispatched").finish(),
             IpfsApiRequest::Response(_) =>
@@ -223,14 +214,11 @@ impl fmt::Debug for IpfsApiRequest {
 }
 
 /// Message send from the API to the worker.
-enum ApiToWorker {
-    /// Dispatches a new HTTP request.
-    Dispatch {
-        /// ID to send back when the response comes back.
-        id: IpfsRequestId,
-        /// Request to start executing.
-        request: IpfsRequest,
-    }
+struct ApiToWorker {
+    /// ID to send back when the response comes back.
+    id: IpfsRequestId,
+    /// Request to start executing.
+    request: IpfsRequest,
 }
 
 /// Message send from the API to the worker.
@@ -264,12 +252,9 @@ pub struct IpfsWorker<I: ipfs::IpfsTypes> {
 }
 
 /// IPFS request being processed by the worker.
-enum IpfsWorkerRequest {
-    /// Request has been dispatched.
-    Dispatched(Pin<Box<dyn Future<Output = Result<IpfsResponse, ipfs::Error>> + Send>>),
-    /// Progressively reading the body of the response and sending it to the channel.
-    Ready(Result<IpfsResponse, ipfs::Error>),
-}
+struct IpfsWorkerRequest(
+    Pin<Box<dyn Future<Output = Result<IpfsResponse, ipfs::Error>> + Send>>
+);
 
 #[derive(Debug)]
 pub enum IpfsResponse {
@@ -297,33 +282,25 @@ impl<I: ipfs::IpfsTypes> Future for IpfsWorker<I> {
 
         // We remove each element from `requests` one by one and add them back only if necessary.
         for n in (0..me.requests.len()).rev() {
-            let (id, request) = me.requests.swap_remove(n);
-            match request {
-                IpfsWorkerRequest::Dispatched(mut future) => {
-                    let response = match Future::poll(Pin::new(&mut future), cx) {
-                        Poll::Pending => {
-                            me.requests.push((id, IpfsWorkerRequest::Dispatched(future)));
-                            continue
-                        },
-                        Poll::Ready(Ok(response)) => response,
-                        Poll::Ready(Err(error)) => {
-							let _ = me.to_api.unbounded_send(WorkerToApi::Fail { id, error });
-							continue;		// don't insert the request back
-						}
-                    };
-
-					let _ = me.to_api.unbounded_send(WorkerToApi::Response {
-						id,
-						value: response,
-					});
-
-                    //me.requests.push((id, IpfsWorkerRequest::Ready(Ok(response))));
-                    cx.waker().wake_by_ref();   // reschedule in order to poll the new future
+            let (id, mut request) = me.requests.swap_remove(n);
+            let response = match Future::poll(Pin::new(&mut request.0), cx) {
+                Poll::Pending => {
+                    me.requests.push((id, request));
                     continue
-                }
+                },
+                Poll::Ready(Ok(response)) => response,
+                Poll::Ready(Err(error)) => {
+					let _ = me.to_api.unbounded_send(WorkerToApi::Fail { id, error });
+					continue;		// don't insert the request back
+				}
+            };
 
-                IpfsWorkerRequest::Ready(_) => {}
-            }
+			let _ = me.to_api.unbounded_send(WorkerToApi::Response {
+				id,
+				value: response,
+			});
+
+            cx.waker().wake_by_ref();   // reschedule in order to poll the new future
         }
 
         let ipfs_node = me.ipfs_node.clone();
@@ -332,10 +309,10 @@ impl<I: ipfs::IpfsTypes> Future for IpfsWorker<I> {
         match Stream::poll_next(Pin::new(&mut me.from_api), cx) {
             Poll::Pending => {},
             Poll::Ready(None) => return Poll::Ready(()),    // stops the worker
-            Poll::Ready(Some(ApiToWorker::Dispatch { id, request })) => {
+            Poll::Ready(Some(ApiToWorker { id, request })) => {
                 let future = Box::pin(ipfs_request(ipfs_node, request));
                 debug_assert!(me.requests.iter().all(|(i, _)| *i != id));
-                me.requests.push((id, IpfsWorkerRequest::Dispatched(future)));
+                me.requests.push((id, IpfsWorkerRequest(future)));
                 cx.waker().wake_by_ref();   // reschedule the task to poll the request
             }
         }
@@ -354,12 +331,7 @@ impl<I: ipfs::IpfsTypes> fmt::Debug for IpfsWorker<I> {
 
 impl fmt::Debug for IpfsWorkerRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            IpfsWorkerRequest::Dispatched(_) =>
-                f.debug_tuple("IpfsWorkerRequest::Dispatched").finish(),
-            IpfsWorkerRequest::Ready(_) =>
-                f.debug_tuple("IpfsWorkerRequest::Response").finish(),
-        }
+        f.debug_tuple("IpfsWorkerRequest").finish()
     }
 }
 

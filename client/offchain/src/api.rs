@@ -188,10 +188,6 @@ impl<Storage: OffchainStorage> OffchainExt for Api<Storage> {
     ) -> Vec<IpfsRequestStatus> {
         self.ipfs.response_wait(ids, deadline)
     }
-
-	fn ipfs_process_block(&mut self) -> Result<(), ()> {
-        self.ipfs.process_block()
-	}
 }
 
 /// Information about the local node's network state.

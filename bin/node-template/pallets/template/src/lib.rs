@@ -109,14 +109,11 @@ decl_module! {
 		}
 
 		fn offchain_worker(block_number: T::BlockNumber) {
-		    if block_number % 2.into() != 1.into() { return; }
-			let ipfs_request = ipfs::Request::new(IpfsRequest::LocalRefs).unwrap();
-			let resp = ipfs_request.wait();
+		    if block_number % 2.into() != 0.into() { return; } // only run on every second block
 
-			match resp {
-                Ok(r) => debug::info!("IPFS request {:?} started", r),
-                Err(e) => debug::warn!("IPFS request creation failed: {:?}", e),
-			}
+			let ipfs_request = ipfs::PendingRequest::new(IpfsRequest::LocalRefs).unwrap();
+            debug::info!("IPFS request started: {:?}", ipfs_request);
+			let _resp = ipfs_request.wait();
 		}
 	}
 }

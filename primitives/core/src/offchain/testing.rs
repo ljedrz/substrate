@@ -320,7 +320,7 @@ impl offchain::Externalities for TestOffchainExt {
 		}
 	}
 
-	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
+	fn ipfs_request_start(&mut self, _request: IpfsRequest) -> Result<IpfsRequestId, ()> {
         let mut state = self.0.write();
         let id = IpfsRequestId(state.requests.len() as u16);
         state.ipfs_requests.insert(id.clone(), IpfsPendingRequest { id });
@@ -338,10 +338,6 @@ impl offchain::Externalities for TestOffchainExt {
 			Some(_) => IpfsRequestStatus::Finished,
 			None => IpfsRequestStatus::Invalid,
 		}).collect()
-	}
-
-	fn ipfs_process_block(&mut self) -> Result<(), ()> {
-        unimplemented!()
 	}
 }
 

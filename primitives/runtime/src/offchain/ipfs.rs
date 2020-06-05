@@ -22,15 +22,21 @@ use sp_core::offchain::{
 	IpfsError,
 };
 
-/// An IPFS request.
-#[derive(Clone, PartialEq, Eq, RuntimeDebug)]
-pub struct Request(IpfsRequest);
+/// A struct representing an uncompleted IPFS request.
+#[derive(PartialEq, Eq, RuntimeDebug)]
+pub struct PendingRequest {
+	/// Request ID
+	pub id: RequestId,
+	/// Request type
+	pub request: IpfsRequest
+}
 
-impl Request {
-	pub fn new(request: IpfsRequest) -> Result<PendingRequest, IpfsError> {
+impl PendingRequest {
+    /// Creates amd starts a specified request for the IPFS node.
+	pub fn new(request: IpfsRequest) -> Result<Self, IpfsError> {
 	    let id = sp_io::offchain::ipfs_request_start(request).map_err(|_| IpfsError::IoError)?;
 
-        Ok(PendingRequest { id })
+        Ok(PendingRequest { id, request })
 	}
 }
 
@@ -43,13 +49,6 @@ pub enum Error {
 	IoError,
 	/// Unknown error has been encountered.
 	Unknown,
-}
-
-/// A struct representing an uncompleted http request.
-#[derive(PartialEq, Eq, RuntimeDebug)]
-pub struct PendingRequest {
-	/// Request ID
-	pub id: RequestId,
 }
 
 /// A result of waiting for a pending request.
@@ -121,53 +120,6 @@ impl Response {
 			id,
 			code,
 		}
-	}
-
-	/// Retrieve the body of this response.
-	pub fn body(&self) -> ResponseBody {
-		ResponseBody::new(self.id)
-	}
-}
-
-#[derive(Clone)]
-pub struct ResponseBody {
-	id: RequestId,
-	error: Option<IpfsError>,
-	deadline: Option<Timestamp>,
-}
-
-#[cfg(feature = "std")]
-impl std::fmt::Debug for ResponseBody {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-		fmt.debug_struct("ResponseBody")
-			.field("id", &self.id)
-			.field("error", &self.error)
-			.field("deadline", &self.deadline)
-			.finish()
-	}
-}
-
-impl ResponseBody {
-	fn new(id: RequestId) -> Self {
-		ResponseBody {
-			id,
-			error: None,
-			deadline: None,
-		}
-	}
-
-	/// Set the deadline for reading the body.
-	pub fn deadline(&mut self, deadline: impl Into<Option<Timestamp>>) {
-		self.deadline = deadline.into();
-		self.error = None;
-	}
-
-	/// Return an error that caused the iterator to return `None`.
-	///
-	/// If the error is `DeadlineReached` you can resume the iterator by setting
-	/// a new deadline.
-	pub fn error(&self) -> &Option<IpfsError> {
-		&self.error
 	}
 }
 
