@@ -365,12 +365,10 @@ impl fmt::Debug for IpfsWorkerRequest {
 
 #[cfg(test)]
 mod tests {
-    use core::convert::Infallible;
     use crate::api::timestamp;
     use super::ipfs;
     use async_std::task;
-    use sp_core::offchain::{IpfsError, IpfsRequest, IpfsRequestId, IpfsRequestStatus, Duration};
-    use futures::future;
+    use sp_core::offchain::{IpfsRequest, IpfsRequestStatus, Duration};
 
     fn ipfs_node() -> ipfs::Ipfs<ipfs::TestTypes> {
         let options = ipfs::IpfsOptions::<ipfs::TestTypes>::default();
@@ -382,19 +380,34 @@ mod tests {
         })
     }
 
+    macro_rules! build_ipfs_node {
+		() => {{
+            fdlimit::raise_fd_limit();
+
+            let (api, worker) = ipfs(ipfs_node());
+
+            std::thread::spawn(move || {
+                let mut rt = tokio::runtime::Runtime::new().unwrap();
+                let worker = rt.spawn(worker);
+                rt.block_on(worker).unwrap();
+            });
+
+            api
+		}};
+	}
+
     #[test]
-    fn basic_identity() {
+    fn metadata_calls() {
         let deadline = timestamp::now().add(Duration::from_millis(10_000));
 
-        // Performs an HTTP query to a background HTTP server.
+        let mut api = build_ipfs_node!();
 
-        let (mut api, engine) = ipfs(ipfs_node());
+        let id1 = api.request_start(IpfsRequest::Identity).unwrap();
+        let id2 = api.request_start(IpfsRequest::LocalRefs).unwrap();
 
-        let id = api.request_start(IpfsRequest::Identity).unwrap();
-
-        match api.response_wait(&[id], Some(deadline))[0] {
-            IpfsRequestStatus::Finished => {},
-            v => panic!("Connecting to localhost failed: {:?}", v)
+        match api.response_wait(&[id1, id2], Some(deadline)).as_slice() {
+            [IpfsRequestStatus::Finished, IpfsRequestStatus::Finished] => {},
+            x => panic!("Connecting to the IPFS node failed: {:?}", x),
         }
     }
 }

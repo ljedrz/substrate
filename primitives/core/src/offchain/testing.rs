@@ -65,16 +65,10 @@ pub struct PendingRequest {
 }
 
 /// Pending IPFS request.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct IpfsPendingRequest {
-	/// Request body
-	pub body: Vec<u8>,
-	/// Has the request been sent already.
-	pub sent: bool,
-	/// Response body
-	pub response: Option<Vec<u8>>,
-	/// Number of bytes already read from the response body.
-	pub read: usize,
+	/// Request id
+	pub id: IpfsRequestId,
 }
 
 /// Internal state of the externalities.
@@ -329,9 +323,7 @@ impl offchain::Externalities for TestOffchainExt {
 	fn ipfs_request_start(&mut self, request: IpfsRequest) -> Result<IpfsRequestId, ()> {
         let mut state = self.0.write();
         let id = IpfsRequestId(state.requests.len() as u16);
-        state.ipfs_requests.insert(id.clone(), IpfsPendingRequest {
-            ..Default::default()
-        });
+        state.ipfs_requests.insert(id.clone(), IpfsPendingRequest { id });
         Ok(id)
     }
 
@@ -343,10 +335,8 @@ impl offchain::Externalities for TestOffchainExt {
 		let state = self.0.read();
 
 		ids.iter().map(|id| match state.ipfs_requests.get(id) {
-			Some(req) if req.response.is_none() =>
-				panic!("No `response` provided for request with id: {:?}", id),
+			Some(_) => IpfsRequestStatus::Finished,
 			None => IpfsRequestStatus::Invalid,
-			_ => IpfsRequestStatus::Finished,
 		}).collect()
 	}
 

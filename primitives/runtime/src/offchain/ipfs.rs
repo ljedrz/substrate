@@ -181,16 +181,19 @@ mod tests {
 	};
 
 	#[test]
-	fn should_send_a_basic_request_and_get_response() {
-		let (offchain, state) = testing::TestOffchainExt::new();
+	fn basic_metadata_request_and_response() {
+		let (offchain, _state) = testing::TestOffchainExt::new();
 		let mut t = TestExternalities::default();
 		t.register_extension(OffchainExt::new(offchain));
 
 		t.execute_with(|| {
-			let request = Request::new(IpfsRequest::Identity).unwrap();
-			let response = request.wait();
+			let identity_request = Request::new(IpfsRequest::Identity).unwrap();
+			let identity_response = identity_request.wait().unwrap();
+			let local_refs_request = Request::new(IpfsRequest::LocalRefs).unwrap();
+			let local_refs_response = local_refs_request.wait().unwrap();
 
-			assert!(response.is_ok());
+			assert!(matches!(identity_response, Response { .. }));
+			assert!(matches!(local_refs_response, Response { .. }));
 		})
 	}
 }
