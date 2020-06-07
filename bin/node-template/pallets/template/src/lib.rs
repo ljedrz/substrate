@@ -111,7 +111,7 @@ decl_module! {
 		fn offchain_worker(block_number: T::BlockNumber) {
 		    if block_number % 2.into() != 0.into() { return; } // only run on every second block
 
-			let ipfs_request = ipfs::PendingRequest::new(IpfsRequest::LocalRefs).unwrap();
+			let ipfs_request = ipfs::PendingRequest::new(IpfsRequest::BitswapStats).unwrap();
             debug::info!("IPFS request started: {:?}", ipfs_request);
 			let _resp = ipfs_request.wait();
 		}

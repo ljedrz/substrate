@@ -27,10 +27,10 @@
 use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
-use ipfs::{Cid, Multiaddr, PublicKey};
+use ipfs::{unixfs, BitswapStats, Block, Cid, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
 use log::{error, info};
 use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, Timestamp};
-use std::{fmt, pin::Pin, task::{Context, Poll}};
+use std::{convert::TryInto, fmt, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
 
 /// Creates a pair of [`IpfsApi`] and [`IpfsWorker`].
@@ -96,7 +96,7 @@ impl IpfsApi {
         let _ = self.to_worker.unbounded_send(ApiToWorker {
             id,
             request
-        }).unwrap();
+        });
 
         self.requests.insert(id, IpfsApiRequest::Dispatched);
 
@@ -124,7 +124,7 @@ impl IpfsApi {
                         },
                         Some(IpfsApiRequest::Fail(_)) => IpfsRequestStatus::IoError,
                         Some(IpfsApiRequest::Response(resp)) => {
-                            info!("IPFS response: {:?}", resp);
+                            info!("IPFS response: {:?}", resp); // TODO: decide how to handle responses
                             IpfsRequestStatus::Finished
                         },
                     });
@@ -170,7 +170,6 @@ impl IpfsApi {
                         Some(IpfsApiRequest::Dispatched) => {
                             self.requests.insert(id, IpfsApiRequest::Response(value));
                         }
-                        None => {}  // can happen if we detected an IO error when sending the body
                         _ => error!("State mismatch between the API and worker"),
                     }
 
@@ -179,7 +178,6 @@ impl IpfsApi {
                         Some(IpfsApiRequest::Dispatched) => {
                             self.requests.insert(id, IpfsApiRequest::Fail(error));
                         }
-                        None => {}  // can happen if we detected an IO error when sending the body
                         _ => error!("State mismatch between the API and worker"),
                     }
 
@@ -260,15 +258,59 @@ struct IpfsWorkerRequest(
 pub enum IpfsResponse {
     Identity(PublicKey, Vec<Multiaddr>),
     LocalRefs(Vec<Cid>),
+    Addrs(Vec<(PeerId, Vec<Multiaddr>)>),
+    LocalAddrs(Vec<Multiaddr>),
+    Connect(()),
+    Disconnect(()),
+    Subscribe(SubscriptionStream), // TODO: actually using the SubscriptionStream would require it to be stored within the node.
+    SubscriptionList(Vec<Vec<u8>>),
+    Unsubscribe(bool),
+    Publish(()),
+    BitswapStats(BitswapStats),
+    AddListeningAddr(Multiaddr),
+    RemoveListeningAddr(()),
+    GetBlock(Block),
+    AddFile(Cid),
+    GetFile(unixfs::File),
 }
 
 async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsResponse, ipfs::Error> {
     match request {
         IpfsRequest::Identity => {
-            let (pk, addrs) = ipfs.identity2().await?;
+            let (pk, addrs) = ipfs.identity().await?;
             Ok(IpfsResponse::Identity(pk, addrs))
         },
-        IpfsRequest::LocalRefs => Ok(IpfsResponse::LocalRefs(ipfs.refs_local2().await?)),
+        IpfsRequest::LocalRefs => Ok(IpfsResponse::LocalRefs(ipfs.refs_local().await?)),
+        IpfsRequest::Connect(addr) => Ok(IpfsResponse::Connect(ipfs.connect(addr.0.try_into()?).await?)),
+        IpfsRequest::Disconnect(addr) => Ok(IpfsResponse::Disconnect(ipfs.disconnect(addr.0.try_into()?).await?)),
+        IpfsRequest::Addrs => Ok(IpfsResponse::Addrs(ipfs.addrs().await?)),
+        IpfsRequest::LocalAddrs => Ok(IpfsResponse::LocalAddrs(ipfs.addrs_local().await?)),
+        IpfsRequest::Subscribe(topic) => {
+            Ok(IpfsResponse::Subscribe(ipfs.pubsub_subscribe(str::from_utf8(&topic)?).await?))
+        },
+        IpfsRequest::SubscriptionList => {
+            Ok(IpfsResponse::SubscriptionList(ipfs.pubsub_subscribed().await?.into_iter().map(|s| s.into_bytes()).collect()))
+        },
+        IpfsRequest::Unsubscribe(topic) => {
+            Ok(IpfsResponse::Unsubscribe(ipfs.pubsub_unsubscribe(str::from_utf8(&topic)?).await?))
+        },
+        IpfsRequest::Publish { topic, message } => {
+            Ok(IpfsResponse::Publish(ipfs.pubsub_publish(str::from_utf8(&topic)?, &message).await?))
+        },
+        IpfsRequest::BitswapStats => Ok(IpfsResponse::BitswapStats(ipfs.bitswap_stats().await?)),
+        IpfsRequest::AddListeningAddr(addr) => {
+            Ok(IpfsResponse::AddListeningAddr(ipfs.add_listening_address(addr.0.try_into()?).await?))
+        },
+        IpfsRequest::RemoveListeningAddr(addr) => {
+            Ok(IpfsResponse::RemoveListeningAddr(ipfs.remove_listening_address(addr.0.try_into()?).await?))
+        },
+        IpfsRequest::GetBlock(cid) => Ok(IpfsResponse::GetBlock(ipfs.get_block(&cid.try_into()?).await?)),
+        IpfsRequest::AddFile(path) => {
+            Ok(IpfsResponse::AddFile(ipfs.add(PathBuf::from_str(str::from_utf8(&path)?)?.into()).await?))
+        },
+        IpfsRequest::GetFile(path) => {
+            Ok(IpfsResponse::GetFile(ipfs.get(IpfsPath::from_str(str::from_utf8(&path)?)?).await?))
+        },
     }
 }
 

@@ -297,7 +297,7 @@ impl<I: IpfsTypes> AsyncApi<I> {
 		let http = self.http.take().expect("Take invoked only once.");
 		let ipfs = self.ipfs.take().expect("Take invoked only once.");
 
-        futures::join!(http, ipfs);
+		futures::join!(http, ipfs);
 	}
 }
 

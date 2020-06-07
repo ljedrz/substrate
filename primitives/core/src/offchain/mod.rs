@@ -257,13 +257,45 @@ impl Timestamp {
 }
 
 /// A request that can be handled by an IPFS node.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByEnum)]
-#[cfg_attr(feature = "std", derive(Hash))]
+#[derive(Clone, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
 pub enum IpfsRequest {
-    /// The node's public key and dedicated external addresses.
+    /// Get the node's public key and dedicated external addresses.
     Identity,
-    /// The list of `Cid`s of blocks known to a node.
+    /// Get the list of `Cid`s of blocks known to a node.
     LocalRefs,
+    /// Get the list of node's peerIds and addresses.
+    Addrs,
+    /// Get the list of node's local addresses.
+    LocalAddrs,
+    /// Connect to an external IPFS node with the specified Multiaddr.
+    Connect(OpaqueMultiaddr),
+    /// Disconnect from an external IPFS node with the specified Multiaddr.
+    Disconnect(OpaqueMultiaddr),
+    /// Subscribe to a given topic.
+    Subscribe(Vec<u8>),
+    /// Obtain the list of currently subscribed topics.
+    SubscriptionList,
+    /// Unsubscribe from a given topic.
+    Unsubscribe(Vec<u8>),
+    /// Publish a given message to a topic.
+    Publish {
+        /// The topic to publish the message to.
+        topic: Vec<u8>,
+        /// The message to publish.
+        message: Vec<u8>
+    },
+    /// Get the bitswap stats of the node.
+    BitswapStats,
+    /// Add an address to listen on.
+    AddListeningAddr(OpaqueMultiaddr),
+    /// Remove an address that is listened on.
+    RemoveListeningAddr(OpaqueMultiaddr),
+    /// Obtain an IPFS block.
+    GetBlock(Vec<u8>),
+    /// Add a file with the given path to the IPFS repo.
+    AddFile(Vec<u8>),
+    /// Get a file with the given IPFS path from the IPFS repo.
+    GetFile(Vec<u8>),
 }
 
 /// Opaque type for offchain IPFS requests.
