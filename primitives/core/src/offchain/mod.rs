@@ -296,6 +296,8 @@ pub enum IpfsRequest {
     AddFile(Vec<u8>),
     /// Get a file with the given IPFS path from the IPFS repo.
     GetFile(Vec<u8>),
+    /// Obtain the list of node's peers.
+    Peers,
 }
 
 /// Opaque type for offchain IPFS requests.

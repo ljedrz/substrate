@@ -27,7 +27,7 @@
 use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
-use ipfs::{unixfs, BitswapStats, Block, Cid, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
+use ipfs::{unixfs, BitswapStats, Block, Cid, Connection, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
 use log::{error, info};
 use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, Timestamp};
 use std::{convert::TryInto, fmt, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
@@ -272,17 +272,22 @@ pub enum IpfsResponse {
     GetBlock(Block),
     AddFile(Cid),
     GetFile(unixfs::File),
+    Peers(Vec<Connection>),
 }
 
 async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsResponse, ipfs::Error> {
+    fn convert_addr(addr: &[u8]) -> Result<Multiaddr, impl std::error::Error> {
+        str::from_utf8(addr)?.parse()
+    }
+
     match request {
         IpfsRequest::Identity => {
             let (pk, addrs) = ipfs.identity().await?;
             Ok(IpfsResponse::Identity(pk, addrs))
         },
         IpfsRequest::LocalRefs => Ok(IpfsResponse::LocalRefs(ipfs.refs_local().await?)),
-        IpfsRequest::Connect(addr) => Ok(IpfsResponse::Connect(ipfs.connect(addr.0.try_into()?).await?)),
-        IpfsRequest::Disconnect(addr) => Ok(IpfsResponse::Disconnect(ipfs.disconnect(addr.0.try_into()?).await?)),
+        IpfsRequest::Connect(addr) => Ok(IpfsResponse::Connect(ipfs.connect(convert_addr(&addr.0)?).await?)),
+        IpfsRequest::Disconnect(addr) => Ok(IpfsResponse::Disconnect(ipfs.disconnect(convert_addr(&addr.0)?).await?)),
         IpfsRequest::Addrs => Ok(IpfsResponse::Addrs(ipfs.addrs().await?)),
         IpfsRequest::LocalAddrs => Ok(IpfsResponse::LocalAddrs(ipfs.addrs_local().await?)),
         IpfsRequest::Subscribe(topic) => {
@@ -299,10 +304,10 @@ async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequ
         },
         IpfsRequest::BitswapStats => Ok(IpfsResponse::BitswapStats(ipfs.bitswap_stats().await?)),
         IpfsRequest::AddListeningAddr(addr) => {
-            Ok(IpfsResponse::AddListeningAddr(ipfs.add_listening_address(addr.0.try_into()?).await?))
+            Ok(IpfsResponse::AddListeningAddr(ipfs.add_listening_address(convert_addr(&addr.0)?).await?))
         },
         IpfsRequest::RemoveListeningAddr(addr) => {
-            Ok(IpfsResponse::RemoveListeningAddr(ipfs.remove_listening_address(addr.0.try_into()?).await?))
+            Ok(IpfsResponse::RemoveListeningAddr(ipfs.remove_listening_address(convert_addr(&addr.0)?).await?))
         },
         IpfsRequest::GetBlock(cid) => Ok(IpfsResponse::GetBlock(ipfs.get_block(&cid.try_into()?).await?)),
         IpfsRequest::AddFile(path) => {
@@ -311,6 +316,7 @@ async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequ
         IpfsRequest::GetFile(path) => {
             Ok(IpfsResponse::GetFile(ipfs.get(IpfsPath::from_str(str::from_utf8(&path)?)?).await?))
         },
+        IpfsRequest::Peers => Ok(IpfsResponse::Peers(ipfs.peers().await?)),
     }
 }
 

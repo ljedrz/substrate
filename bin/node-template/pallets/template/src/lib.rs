@@ -11,7 +11,7 @@
 
 use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch};
 use frame_system::{self as system, ensure_signed};
-use sp_core::offchain::IpfsRequest;
+use sp_core::offchain::{IpfsRequest, OpaqueMultiaddr, Timestamp};
 use sp_runtime::offchain::ipfs;
 
 #[cfg(test)]
@@ -109,11 +109,26 @@ decl_module! {
 		}
 
 		fn offchain_worker(block_number: T::BlockNumber) {
-		    if block_number % 2.into() != 0.into() { return; } // only run on every second block
+            if block_number == 0.into() {
+                Self::connect_to_bootstrapper();
+            }
 
-			let ipfs_request = ipfs::PendingRequest::new(IpfsRequest::BitswapStats).unwrap();
-            debug::info!("IPFS request started: {:?}", ipfs_request);
-			let _resp = ipfs_request.wait();
+		    if block_number % 2.into() != 1.into() { return; } // only run on every second block
+
+			Self::ipfs_request(IpfsRequest::Peers, None).unwrap();
 		}
 	}
+}
+
+impl<T: Trait> Module<T> {
+    fn connect_to_bootstrapper() {
+        let bootstrapper_addr = OpaqueMultiaddr(b"/ip4/104.131.131.82/tcp/4001".to_vec());
+        Self::ipfs_request(IpfsRequest::Connect(bootstrapper_addr), None).unwrap();
+    }
+
+    fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>) -> Result<(), ipfs::PendingRequest> {
+        let ipfs_request = ipfs::PendingRequest::new(req).unwrap();
+        debug::info!("IPFS request started: {:?}", ipfs_request);
+        ipfs_request.try_wait(deadline).map(|_| ())
+    }
 }
