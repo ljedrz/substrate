@@ -1,134 +1,113 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-/// A FRAME pallet template with necessary imports
-
-/// Feel free to remove or edit this file as needed.
-/// If you change the name of this file, make sure to update its references in runtime/src/lib.rs
-/// If you remove this file, you can remove those references
-
-/// For more guidance on Substrate FRAME, see the example pallet
-/// https://github.com/paritytech/substrate/blob/master/frame/example/src/lib.rs
-
-use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch};
+use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec};
 use frame_system::{self as system, ensure_signed};
-use sp_core::offchain::{IpfsRequest, OpaqueMultiaddr, Timestamp};
+use sp_core::offchain::{Duration, IpfsRequest, OpaqueMultiaddr, Timestamp};
 use sp_runtime::offchain::ipfs;
-
-#[cfg(test)]
-mod mock;
 
 #[cfg(test)]
 mod tests;
 
+// pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"ipfs");
+
+const BOOTSTRAPPER_ADDR: &str = "/ip4/104.131.131.82/tcp/4001";
+
 /// The pallet's configuration trait.
 pub trait Trait: system::Trait {
-	// Add other types and constants required to configure this pallet.
+    // Add other types and constants required to configure this pallet.
 
-	/// The overarching event type.
-	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+    /// The overarching event type.
+    type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
 
 // This pallet's storage items.
 decl_storage! {
-	// It is important to update your storage name so that your pallet's
-	// storage items are isolated from other pallets.
-	// ---------------------------------vvvvvvvvvvvvvv
-	trait Store for Module<T: Trait> as TemplateModule {
-		// Just a dummy storage item.
-		// Here we are declaring a StorageValue, `Something` as a Option<u32>
-		// `get(fn something)` is the default getter which returns either the stored `u32` or `None` if nothing stored
-		Something get(fn something): Option<u32>;
-	}
+    trait Store for Module<T: Trait> as TemplateModule {
+        Something get(fn something): Option<u32>;
+    }
 }
 
 // The pallet's events
 decl_event!(
-	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-		/// Just a dummy event.
-		/// Event `Something` is declared with a parameter of the type `u32` and `AccountId`
-		/// To emit this event, we call the deposit function, from our runtime functions
-		SomethingStored(u32, AccountId),
-	}
+    pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
+        NewConnection(AccountId),
+        DroppedConnection(AccountId),
+    }
 );
 
 // The pallet's errors
 decl_error! {
-	pub enum Error for Module<T: Trait> {
-		/// Value was None
-		NoneValue,
-		/// Value reached maximum and cannot be incremented further
-		StorageOverflow,
-	}
+    pub enum Error for Module<T: Trait> {
+        CantRequest,
+        CantConnect,
+        CantDisconnect,
+        CantGetMetadata,
+    }
 }
 
 // The pallet's dispatchable functions.
 decl_module! {
-	/// The module declaration.
-	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-		// Initializing errors
-		// this includes information about your errors in the node's metadata.
-		// it is needed only if you are using errors in your pallet
-		type Error = Error<T>;
+    /// The module declaration.
+    pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+        // Initializing errors
+        type Error = Error<T>;
 
-		// Initializing events
-		// this is needed only if you are using events in your pallet
-		fn deposit_event() = default;
+        // Initializing events
+        fn deposit_event() = default;
 
-		/// Just a dummy entry point.
-		/// function that can be called by the external world as an extrinsics call
-		/// takes a parameter of the type `AccountId`, stores it, and emits an event
-		#[weight = 0]
-		pub fn do_something(origin, something: u32) -> dispatch::DispatchResult {
-			// Check it was signed and get the signer. See also: ensure_root and ensure_none
-			let who = ensure_signed(origin)?;
+        #[weight = 100_000]
+        pub fn connect(origin, addr: Vec<u8>) {
+            let who = ensure_signed(origin)?;
 
-			// Code to execute when something calls this.
-			// For example: the following line stores the passed in u32 in the storage
-			Something::put(something);
+            let addr = OpaqueMultiaddr(addr);
+            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
+            Self::ipfs_request(IpfsRequest::Connect(addr), Some(deadline))
+                .map_err(|_| Error::<T>::CantConnect)?;
+            Self::deposit_event(RawEvent::NewConnection(who));
+        }
 
-			// Here we are raising the Something event
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
-			Ok(())
-		}
+        #[weight = 500_000]
+        pub fn disconnect(origin, addr: Vec<u8>) {
+            let who = ensure_signed(origin)?;
 
-		/// Another dummy entry point.
-		/// takes no parameters, attempts to increment storage value, and possibly throws an error
-		#[weight = 0]
-		pub fn cause_error(origin) -> dispatch::DispatchResult {
-			// Check it was signed and get the signer. See also: ensure_root and ensure_none
-			let _who = ensure_signed(origin)?;
+            let addr = OpaqueMultiaddr(addr);
+            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
+            Self::ipfs_request(IpfsRequest::Disconnect(addr), Some(deadline))
+                .map_err(|_| Error::<T>::CantDisconnect)?;
+            Self::deposit_event(RawEvent::DroppedConnection(who));
+        }
 
-			match Something::get() {
-				None => Err(Error::<T>::NoneValue)?,
-				Some(old) => {
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					Something::put(new);
-					Ok(())
-				},
-			}
-		}
+        #[weight = 10_000]
+        pub fn peers(origin) {
+            ensure_signed(origin)?;
 
-		fn offchain_worker(block_number: T::BlockNumber) {
+            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
+            Self::ipfs_request(IpfsRequest::Peers, Some(deadline))
+                .map_err(|_| Error::<T>::CantGetMetadata)?;
+        }
+
+        fn offchain_worker(block_number: T::BlockNumber) {
+            // print the IPFS identity and connect to the bootstrapper at first block
             if block_number == 0.into() {
-                Self::connect_to_bootstrapper();
+                Self::ipfs_request(IpfsRequest::Identity, None).expect("IPFS node not available");
+                Self::connect_to_bootstrapper().expect("IPFS bootstrapper not available");
             }
-
-		    if block_number % 2.into() != 1.into() { return; } // only run on every second block
-
-			Self::ipfs_request(IpfsRequest::Peers, None).unwrap();
-		}
-	}
+        }
+    }
 }
 
 impl<T: Trait> Module<T> {
-    fn connect_to_bootstrapper() {
-        let bootstrapper_addr = OpaqueMultiaddr(b"/ip4/104.131.131.82/tcp/4001".to_vec());
-        Self::ipfs_request(IpfsRequest::Connect(bootstrapper_addr), None).unwrap();
+    fn connect_to_bootstrapper() -> Result<(), Error<T>> {
+        let bootstrapper_addr = OpaqueMultiaddr(BOOTSTRAPPER_ADDR.as_bytes().to_vec());
+        let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(5_000));
+        Self::ipfs_request(IpfsRequest::Connect(bootstrapper_addr), Some(deadline))
     }
 
-    fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>) -> Result<(), ipfs::PendingRequest> {
-        let ipfs_request = ipfs::PendingRequest::new(req).unwrap();
-        debug::info!("IPFS request started: {:?}", ipfs_request);
-        ipfs_request.try_wait(deadline).map(|_| ())
+    fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>)
+        -> Result<(), Error<T>>
+    {
+        let ipfs_request = ipfs::PendingRequest::new(req).map_err(|_| Error::<T>::CantRequest)?;
+        debug::debug!("IPFS request started: {:?}", ipfs_request);
+        ipfs_request.try_wait(deadline).map(|_| ()).map_err(|_| Error::<T>::CantRequest)
     }
 }
