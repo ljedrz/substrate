@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec};
+use codec::{Encode, Decode};
+use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec, storage::IterableStorageMap};
 use frame_system::{self as system, ensure_signed};
 use sp_core::offchain::{Duration, IpfsRequest, OpaqueMultiaddr, Timestamp};
 use sp_runtime::offchain::ipfs;
@@ -23,15 +24,28 @@ pub trait Trait: system::Trait {
 // This pallet's storage items.
 decl_storage! {
     trait Store for Module<T: Trait> as TemplateModule {
-        Something get(fn something): Option<u32>;
+        // A map of known addresses and their availability
+        Addresses get(fn addrs): map hasher(blake2_128_concat) OpaqueMultiaddr => ExternalNodeStatus;
+    }
+}
+
+#[derive(Encode, Decode)]
+pub enum ExternalNodeStatus {
+    ToConnect,
+    ToDisconnect,
+}
+
+impl Default for ExternalNodeStatus {
+    fn default() -> Self {
+        Self::ToConnect
     }
 }
 
 // The pallet's events
 decl_event!(
     pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-        NewConnection(AccountId),
-        DroppedConnection(AccountId),
+        ConnectionAdded(AccountId),
+        ConnectionRemoved(AccountId),
     }
 );
 
@@ -56,34 +70,21 @@ decl_module! {
         fn deposit_event() = default;
 
         #[weight = 100_000]
-        pub fn connect(origin, addr: Vec<u8>) {
+        pub fn add_connection(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
 
             let addr = OpaqueMultiaddr(addr);
-            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
-            Self::ipfs_request(IpfsRequest::Connect(addr), Some(deadline))
-                .map_err(|_| Error::<T>::CantConnect)?;
-            Self::deposit_event(RawEvent::NewConnection(who));
+            Addresses::insert(addr, ExternalNodeStatus::ToConnect);
+            Self::deposit_event(RawEvent::ConnectionAdded(who));
         }
 
         #[weight = 500_000]
-        pub fn disconnect(origin, addr: Vec<u8>) {
+        pub fn remove_connection(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
 
             let addr = OpaqueMultiaddr(addr);
-            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
-            Self::ipfs_request(IpfsRequest::Disconnect(addr), Some(deadline))
-                .map_err(|_| Error::<T>::CantDisconnect)?;
-            Self::deposit_event(RawEvent::DroppedConnection(who));
-        }
-
-        #[weight = 10_000]
-        pub fn peers(origin) {
-            ensure_signed(origin)?;
-
-            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(2_000));
-            Self::ipfs_request(IpfsRequest::Peers, Some(deadline))
-                .map_err(|_| Error::<T>::CantGetMetadata)?;
+            Addresses::insert(addr, ExternalNodeStatus::ToDisconnect);
+            Self::deposit_event(RawEvent::ConnectionRemoved(who));
         }
 
         fn offchain_worker(block_number: T::BlockNumber) {
@@ -91,6 +92,10 @@ decl_module! {
             if block_number == 0.into() {
                 Self::ipfs_request(IpfsRequest::Identity, None).expect("IPFS node not available");
                 Self::connect_to_bootstrapper().expect("IPFS bootstrapper not available");
+            }
+
+            if block_number % 2.into() == 1.into() {
+                Self::connection_housekeeping();
             }
         }
     }
@@ -107,7 +112,26 @@ impl<T: Trait> Module<T> {
         -> Result<(), Error<T>>
     {
         let ipfs_request = ipfs::PendingRequest::new(req).map_err(|_| Error::<T>::CantRequest)?;
-        debug::debug!("IPFS request started: {:?}", ipfs_request);
+        debug::info!("IPFS request started: {:?}", ipfs_request);
         ipfs_request.try_wait(deadline).map(|_| ()).map_err(|_| Error::<T>::CantRequest)
+    }
+
+    fn connection_housekeeping() -> Result<(), Error<T>> {
+        use self::ExternalNodeStatus::*;
+
+        let mut conn_deadline;
+
+        debug::info!("Commencing IPFS connection housekeeping");
+
+        for (addr, status) in Addresses::drain() {
+            conn_deadline = Some(sp_io::offchain::timestamp().add(Duration::from_millis(1_000)));
+
+            match status {
+                ToConnect => Self::ipfs_request(IpfsRequest::Connect(addr), conn_deadline),
+                ToDisconnect => Self::ipfs_request(IpfsRequest::Disconnect(addr), conn_deadline),
+            };
+        }
+
+        Ok(())
     }
 }
