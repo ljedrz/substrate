@@ -1,22 +1,40 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use codec::{Encode, Decode};
 use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec, storage::IterableStorageMap};
 use frame_system::{self as system, ensure_signed};
 use sp_core::offchain::{Duration, IpfsRequest, OpaqueMultiaddr, Timestamp};
-use sp_runtime::offchain::ipfs;
+use sp_runtime::offchain::{ipfs, KeyTypeId};
 
 #[cfg(test)]
 mod tests;
 
-// pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"ipfs");
+pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"ipfs");
+
+/// Based on the above `KeyTypeId` we need to generate a pallet-specific crypto type wrappers.
+/// We can use from supported crypto kinds (`sr25519`, `ed25519` and `ecdsa`) and augment
+/// the types with this pallet-specific identifier.
+pub mod crypto {
+	use super::KEY_TYPE;
+	use sp_runtime::{
+		app_crypto::{app_crypto, sr25519},
+		traits::Verify,
+	};
+	use sp_core::sr25519::Signature as Sr25519Signature;
+	app_crypto!(sr25519, KEY_TYPE);
+
+	pub struct TestAuthId;
+	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature> for TestAuthId {
+		type RuntimeAppPublic = Public;
+		type GenericSignature = sp_core::sr25519::Signature;
+		type GenericPublic = sp_core::sr25519::Public;
+	}
+}
+
 
 const BOOTSTRAPPER_ADDR: &str = "/ip4/104.131.131.82/tcp/4001";
 
 /// The pallet's configuration trait.
 pub trait Trait: system::Trait {
-    // Add other types and constants required to configure this pallet.
-
     /// The overarching event type.
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
@@ -24,28 +42,16 @@ pub trait Trait: system::Trait {
 // This pallet's storage items.
 decl_storage! {
     trait Store for Module<T: Trait> as TemplateModule {
-        // A map of known addresses and their availability
-        Addresses get(fn addrs): map hasher(blake2_128_concat) OpaqueMultiaddr => ExternalNodeStatus;
-    }
-}
-
-#[derive(Encode, Decode)]
-pub enum ExternalNodeStatus {
-    ToConnect,
-    ToDisconnect,
-}
-
-impl Default for ExternalNodeStatus {
-    fn default() -> Self {
-        Self::ToConnect
+        // A list of known addresses.
+        Addresses: map hasher(blake2_128_concat) OpaqueMultiaddr => ();
     }
 }
 
 // The pallet's events
 decl_event!(
     pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-        ConnectionAdded(AccountId),
-        ConnectionRemoved(AccountId),
+        AddressAdded(AccountId),
+        AddressRemoved(AccountId),
     }
 );
 
@@ -70,21 +76,21 @@ decl_module! {
         fn deposit_event() = default;
 
         #[weight = 100_000]
-        pub fn add_connection(origin, addr: Vec<u8>) {
+        pub fn add_address(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
-
             let addr = OpaqueMultiaddr(addr);
-            Addresses::insert(addr, ExternalNodeStatus::ToConnect);
-            Self::deposit_event(RawEvent::ConnectionAdded(who));
+
+            Addresses::insert(addr, ());
+            Self::deposit_event(RawEvent::AddressAdded(who));
         }
 
         #[weight = 500_000]
-        pub fn remove_connection(origin, addr: Vec<u8>) {
+        pub fn remove_address(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
-
             let addr = OpaqueMultiaddr(addr);
-            Addresses::insert(addr, ExternalNodeStatus::ToDisconnect);
-            Self::deposit_event(RawEvent::ConnectionRemoved(who));
+
+            Addresses::remove(addr);
+            Self::deposit_event(RawEvent::AddressRemoved(who));
         }
 
         fn offchain_worker(block_number: T::BlockNumber) {
@@ -95,7 +101,7 @@ decl_module! {
             }
 
             if block_number % 2.into() == 1.into() {
-                Self::connection_housekeeping();
+                //Self::conn_housekeeping();
             }
         }
     }
@@ -117,19 +123,15 @@ impl<T: Trait> Module<T> {
     }
 
     fn connection_housekeeping() -> Result<(), Error<T>> {
-        use self::ExternalNodeStatus::*;
-
-        let mut conn_deadline;
-
         debug::info!("Commencing IPFS connection housekeeping");
 
-        for (addr, status) in Addresses::drain() {
-            conn_deadline = Some(sp_io::offchain::timestamp().add(Duration::from_millis(1_000)));
+        // let current_ipfs_peers = ipfs_request(IpfsRequest::Peers);
 
-            match status {
-                ToConnect => Self::ipfs_request(IpfsRequest::Connect(addr), conn_deadline),
-                ToDisconnect => Self::ipfs_request(IpfsRequest::Disconnect(addr), conn_deadline),
-            };
+        let mut deadline;
+        for (addr, _) in <Addresses>::drain() {
+            deadline = Some(sp_io::offchain::timestamp().add(Duration::from_millis(1_000)));
+
+            Self::ipfs_request(IpfsRequest::Connect(addr), deadline);
         }
 
         Ok(())
