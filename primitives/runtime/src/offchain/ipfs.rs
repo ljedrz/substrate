@@ -8,7 +8,25 @@
 //!
 //!
 //! Example:
-//! TODO
+//! ```rust,no_run
+//! use sp_core::offchain::{IpfsRequest, IpfsResponse};
+//! use sp_runtime::offchain::ipfs::{PendingRequest, Response};
+//!
+//! // initiate a `Peers` request
+//! let pending = PendingRequest::new(IpfsRequest::Peers).unwrap();
+//!
+//! // wait for the response indefinitely
+//! let mut response = pending.wait().unwrap();
+//!
+//! // then check the current peers
+//! let peers = if let IpfsResponse::Peers(peers) = response.response {
+//!     peers
+//! } else {
+//!     unreachable!();
+//! };
+//!
+//! assert!(peers.is_empty());
+//! ```
 
 use sp_std::prelude::Vec;
 #[cfg(not(feature = "std"))]
@@ -140,9 +158,9 @@ mod tests {
 		t.register_extension(OffchainExt::new(offchain));
 
 		t.execute_with(|| {
-			let identity_request = Request::new(IpfsRequest::Identity).unwrap();
+			let identity_request = PendingRequest::new(IpfsRequest::Identity).unwrap();
 			let identity_response = identity_request.wait().unwrap();
-			let local_refs_request = Request::new(IpfsRequest::LocalRefs).unwrap();
+			let local_refs_request = PendingRequest::new(IpfsRequest::LocalRefs).unwrap();
 			let local_refs_response = local_refs_request.wait().unwrap();
 
 			assert!(matches!(identity_response, Response { .. }));

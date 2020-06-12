@@ -1,19 +1,3 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
-// This file is part of Substrate.
-
-// Substrate is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// Substrate is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with Substrate.  If not, see <http://www.gnu.org/licenses/>.
-
 //! This module is composed of two structs: [`IpfsApi`] and [`IpfsWorker`]. Calling the [`ipfs`]
 //! function returns a pair of [`IpfsApi`] and [`IpfsWorker`] that share some state.
 //!
@@ -28,7 +12,7 @@ use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
 use ipfs::{unixfs, BitswapStats, Block, Cid, Connection, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
-use log::{debug, error};
+use log::error;
 use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, IpfsResponse, OpaqueMultiaddr, Timestamp};
 use std::{convert::TryInto, fmt, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
@@ -124,7 +108,6 @@ impl IpfsApi {
                         },
                         Some(IpfsApiRequest::Fail(_)) => IpfsRequestStatus::IoError,
                         Some(IpfsApiRequest::Response(resp)) => {
-                            debug!("IPFS response: {:?}", resp);
                             match resp {
                                 IpfsNativeResponse::Peers(conns) => {
                                     let addrs = conns.into_iter().map(|conn|
@@ -262,7 +245,6 @@ struct IpfsWorkerRequest(
     Pin<Box<dyn Future<Output = Result<IpfsNativeResponse, ipfs::Error>> + Send>>
 );
 
-#[derive(Debug)]
 pub enum IpfsNativeResponse {
     Identity(PublicKey, Vec<Multiaddr>),
     LocalRefs(Vec<Cid>),
