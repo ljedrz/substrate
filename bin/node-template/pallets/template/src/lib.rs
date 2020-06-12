@@ -1,36 +1,16 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec, storage::IterableStorageMap};
+use frame_support::{debug, decl_module, decl_storage, decl_event, decl_error, dispatch::Vec};
 use frame_system::{self as system, ensure_signed};
-use sp_core::offchain::{Duration, IpfsRequest, OpaqueMultiaddr, Timestamp};
-use sp_runtime::offchain::{ipfs, KeyTypeId};
+use sp_core::offchain::{Duration, IpfsRequest, IpfsResponse, OpaqueMultiaddr, Timestamp};
+use sp_io::offchain::timestamp;
+use sp_runtime::offchain::ipfs;
 
 #[cfg(test)]
 mod tests;
 
-pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"ipfs");
-
-/// Based on the above `KeyTypeId` we need to generate a pallet-specific crypto type wrappers.
-/// We can use from supported crypto kinds (`sr25519`, `ed25519` and `ecdsa`) and augment
-/// the types with this pallet-specific identifier.
-pub mod crypto {
-	use super::KEY_TYPE;
-	use sp_runtime::{
-		app_crypto::{app_crypto, sr25519},
-		traits::Verify,
-	};
-	use sp_core::sr25519::Signature as Sr25519Signature;
-	app_crypto!(sr25519, KEY_TYPE);
-
-	pub struct TestAuthId;
-	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature> for TestAuthId {
-		type RuntimeAppPublic = Public;
-		type GenericSignature = sp_core::sr25519::Signature;
-		type GenericPublic = sp_core::sr25519::Public;
-	}
-}
-
-
+// an IPFS bootstrapper node that can be connected to
+#[allow(unused)]
 const BOOTSTRAPPER_ADDR: &str = "/ip4/104.131.131.82/tcp/4001";
 
 /// The pallet's configuration trait.
@@ -42,8 +22,8 @@ pub trait Trait: system::Trait {
 // This pallet's storage items.
 decl_storage! {
     trait Store for Module<T: Trait> as TemplateModule {
-        // A list of known addresses.
-        Addresses: map hasher(blake2_128_concat) OpaqueMultiaddr => ();
+        // A list of desired addresses to keep connections to
+        pub DesiredConnections: Vec<OpaqueMultiaddr>;
     }
 }
 
@@ -58,10 +38,9 @@ decl_event!(
 // The pallet's errors
 decl_error! {
     pub enum Error for Module<T: Trait> {
-        CantRequest,
-        CantConnect,
-        CantDisconnect,
-        CantGetMetadata,
+        CantCreateRequest,
+        RequestTimeout,
+        RequestFailed,
     }
 }
 
@@ -75,63 +54,90 @@ decl_module! {
         // Initializing events
         fn deposit_event() = default;
 
+        /// Add an address to the list of desired connections. The connection will be established
+        /// during the next run of the off-chain `connection_housekeeping` process. If it cannot be
+        /// established, it will be re-attempted during the subsequest housekeeping runs until it
+        /// succeeds.
         #[weight = 100_000]
         pub fn add_address(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
             let addr = OpaqueMultiaddr(addr);
 
-            Addresses::insert(addr, ());
+            DesiredConnections::mutate(|addrs| if !addrs.contains(&addr) { addrs.push(addr) });
             Self::deposit_event(RawEvent::AddressAdded(who));
         }
 
+        /// Remove an address from the list of desired connections. The connection will be severed
+        /// during the next run of the off-chain `connection_housekeeping` process.
         #[weight = 500_000]
         pub fn remove_address(origin, addr: Vec<u8>) {
             let who = ensure_signed(origin)?;
             let addr = OpaqueMultiaddr(addr);
 
-            Addresses::remove(addr);
+            DesiredConnections::mutate(|addrs| if let Some(idx) = addrs.iter().position(|e| *e == addr) { addrs.remove(idx); });
             Self::deposit_event(RawEvent::AddressRemoved(who));
         }
 
         fn offchain_worker(block_number: T::BlockNumber) {
-            // print the IPFS identity and connect to the bootstrapper at first block
-            if block_number == 0.into() {
-                Self::ipfs_request(IpfsRequest::Identity, None).expect("IPFS node not available");
-                Self::connect_to_bootstrapper().expect("IPFS bootstrapper not available");
-            }
-
+            // run every other block
             if block_number % 2.into() == 1.into() {
-                //Self::conn_housekeeping();
+                if let Err(e) = Self::connection_housekeeping() {
+                    debug::error!("Encountered an error during IPFS connection housekeeping: {:?}", e);
+                }
             }
         }
     }
 }
 
 impl<T: Trait> Module<T> {
-    fn connect_to_bootstrapper() -> Result<(), Error<T>> {
-        let bootstrapper_addr = OpaqueMultiaddr(BOOTSTRAPPER_ADDR.as_bytes().to_vec());
-        let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(5_000));
-        Self::ipfs_request(IpfsRequest::Connect(bootstrapper_addr), Some(deadline))
-    }
-
-    fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>)
-        -> Result<(), Error<T>>
-    {
-        let ipfs_request = ipfs::PendingRequest::new(req).map_err(|_| Error::<T>::CantRequest)?;
-        debug::info!("IPFS request started: {:?}", ipfs_request);
-        ipfs_request.try_wait(deadline).map(|_| ()).map_err(|_| Error::<T>::CantRequest)
+    // send a request to the local IPFS node; can only be called be an off-chain worker
+    fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>) -> Result<IpfsResponse, Error<T>> {
+        let ipfs_request = ipfs::PendingRequest::new(req).map_err(|_| Error::<T>::CantCreateRequest)?;
+        // debug::info!("IPFS request started: {:?}", ipfs_request);
+        ipfs_request.try_wait(deadline)
+            .map_err(|_| Error::<T>::RequestTimeout)?
+            .map(|r| r.response)
+            .map_err(|_| Error::<T>::RequestFailed)
     }
 
     fn connection_housekeeping() -> Result<(), Error<T>> {
         debug::info!("Commencing IPFS connection housekeeping");
 
-        // let current_ipfs_peers = ipfs_request(IpfsRequest::Peers);
-
         let mut deadline;
-        for (addr, _) in <Addresses>::drain() {
-            deadline = Some(sp_io::offchain::timestamp().add(Duration::from_millis(1_000)));
 
-            Self::ipfs_request(IpfsRequest::Connect(addr), deadline);
+        // obtain the node's current list of connected peers
+        deadline = Some(timestamp().add(Duration::from_millis(1_000)));
+        let current_ipfs_peers = if let IpfsResponse::Peers(peers) = Self::ipfs_request(IpfsRequest::Peers, deadline)? {
+            peers
+        } else {
+            unreachable!("can't get any other response from that request; qed");
+        };
+
+        debug::info!("current IPFS peers: {:?}", current_ipfs_peers);
+
+        // get the list of desired connections
+        let wanted_addresses = DesiredConnections::get();
+
+        // connect to the desired peers if not yet connected
+        for addr in &wanted_addresses {
+            deadline = Some(timestamp().add(Duration::from_millis(1_000)));
+
+            if !current_ipfs_peers.contains(addr) {
+                if let Err(e) = Self::ipfs_request(IpfsRequest::Connect(addr.clone()), deadline) {
+                    debug::error!("Can't connect to a desired address: {:?}", e);
+                }
+            }
+        }
+
+        // disconnect from peers that are no longer desired
+        for addr in current_ipfs_peers {
+            deadline = Some(timestamp().add(Duration::from_millis(1_000)));
+
+            if !wanted_addresses.contains(&addr) {
+                if let Err(e) = Self::ipfs_request(IpfsRequest::Disconnect(addr), deadline) {
+                    debug::error!("Can't disconnect from a no-longer desired address: {:?}", e);
+                }
+            }
         }
 
         Ok(())

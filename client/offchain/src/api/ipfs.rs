@@ -28,8 +28,8 @@ use crate::api::timestamp;
 use fnv::FnvHashMap;
 use futures::{prelude::*, future};
 use ipfs::{unixfs, BitswapStats, Block, Cid, Connection, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
-use log::{error, info};
-use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, Timestamp};
+use log::{debug, error};
+use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, IpfsResponse, OpaqueMultiaddr, Timestamp};
 use std::{convert::TryInto, fmt, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
 
@@ -76,7 +76,7 @@ pub struct IpfsApi {
 /// One active request within `IpfsApi`.
 enum IpfsApiRequest {
     Dispatched,
-    Response(IpfsResponse),
+    Response(IpfsNativeResponse),
     Fail(ipfs::Error),
 }
 
@@ -124,8 +124,16 @@ impl IpfsApi {
                         },
                         Some(IpfsApiRequest::Fail(_)) => IpfsRequestStatus::IoError,
                         Some(IpfsApiRequest::Response(resp)) => {
-                            info!("IPFS response: {:?}", resp); // TODO: decide how to handle responses
-                            IpfsRequestStatus::Finished
+                            debug!("IPFS response: {:?}", resp);
+                            match resp {
+                                IpfsNativeResponse::Peers(conns) => {
+                                    let addrs = conns.into_iter().map(|conn|
+                                        OpaqueMultiaddr(conn.address.to_string().into_bytes())
+                                    ).collect();
+                                    IpfsRequestStatus::Finished(IpfsResponse::Peers(addrs))
+                                },
+                                _ => IpfsRequestStatus::Finished(IpfsResponse::Success),
+                            }
                         },
                     });
                 }
@@ -226,7 +234,7 @@ enum WorkerToApi {
         /// The ID that was passed to the worker.
         id: IpfsRequestId,
         /// Status code of the response.
-        value: IpfsResponse,
+        value: IpfsNativeResponse,
     },
     /// A request has failed because of an error. The request is then no longer valid.
     Fail {
@@ -251,11 +259,11 @@ pub struct IpfsWorker<I: ipfs::IpfsTypes> {
 
 /// IPFS request being processed by the worker.
 struct IpfsWorkerRequest(
-    Pin<Box<dyn Future<Output = Result<IpfsResponse, ipfs::Error>> + Send>>
+    Pin<Box<dyn Future<Output = Result<IpfsNativeResponse, ipfs::Error>> + Send>>
 );
 
 #[derive(Debug)]
-pub enum IpfsResponse {
+pub enum IpfsNativeResponse {
     Identity(PublicKey, Vec<Multiaddr>),
     LocalRefs(Vec<Cid>),
     Addrs(Vec<(PeerId, Vec<Multiaddr>)>),
@@ -275,7 +283,7 @@ pub enum IpfsResponse {
     Peers(Vec<Connection>),
 }
 
-async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsResponse, ipfs::Error> {
+async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsNativeResponse, ipfs::Error> {
     fn convert_addr(addr: &[u8]) -> Result<Multiaddr, impl std::error::Error> {
         str::from_utf8(addr)?.parse()
     }
@@ -283,40 +291,40 @@ async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequ
     match request {
         IpfsRequest::Identity => {
             let (pk, addrs) = ipfs.identity().await?;
-            Ok(IpfsResponse::Identity(pk, addrs))
+            Ok(IpfsNativeResponse::Identity(pk, addrs))
         },
-        IpfsRequest::LocalRefs => Ok(IpfsResponse::LocalRefs(ipfs.refs_local().await?)),
-        IpfsRequest::Connect(addr) => Ok(IpfsResponse::Connect(ipfs.connect(convert_addr(&addr.0)?).await?)),
-        IpfsRequest::Disconnect(addr) => Ok(IpfsResponse::Disconnect(ipfs.disconnect(convert_addr(&addr.0)?).await?)),
-        IpfsRequest::Addrs => Ok(IpfsResponse::Addrs(ipfs.addrs().await?)),
-        IpfsRequest::LocalAddrs => Ok(IpfsResponse::LocalAddrs(ipfs.addrs_local().await?)),
+        IpfsRequest::LocalRefs => Ok(IpfsNativeResponse::LocalRefs(ipfs.refs_local().await?)),
+        IpfsRequest::Connect(addr) => Ok(IpfsNativeResponse::Connect(ipfs.connect(convert_addr(&addr.0)?).await?)),
+        IpfsRequest::Disconnect(addr) => Ok(IpfsNativeResponse::Disconnect(ipfs.disconnect(convert_addr(&addr.0)?).await?)),
+        IpfsRequest::Addrs => Ok(IpfsNativeResponse::Addrs(ipfs.addrs().await?)),
+        IpfsRequest::LocalAddrs => Ok(IpfsNativeResponse::LocalAddrs(ipfs.addrs_local().await?)),
         IpfsRequest::Subscribe(topic) => {
-            Ok(IpfsResponse::Subscribe(ipfs.pubsub_subscribe(str::from_utf8(&topic)?).await?))
+            Ok(IpfsNativeResponse::Subscribe(ipfs.pubsub_subscribe(str::from_utf8(&topic)?).await?))
         },
         IpfsRequest::SubscriptionList => {
-            Ok(IpfsResponse::SubscriptionList(ipfs.pubsub_subscribed().await?.into_iter().map(|s| s.into_bytes()).collect()))
+            Ok(IpfsNativeResponse::SubscriptionList(ipfs.pubsub_subscribed().await?.into_iter().map(|s| s.into_bytes()).collect()))
         },
         IpfsRequest::Unsubscribe(topic) => {
-            Ok(IpfsResponse::Unsubscribe(ipfs.pubsub_unsubscribe(str::from_utf8(&topic)?).await?))
+            Ok(IpfsNativeResponse::Unsubscribe(ipfs.pubsub_unsubscribe(str::from_utf8(&topic)?).await?))
         },
         IpfsRequest::Publish { topic, message } => {
-            Ok(IpfsResponse::Publish(ipfs.pubsub_publish(str::from_utf8(&topic)?, &message).await?))
+            Ok(IpfsNativeResponse::Publish(ipfs.pubsub_publish(str::from_utf8(&topic)?, &message).await?))
         },
-        IpfsRequest::BitswapStats => Ok(IpfsResponse::BitswapStats(ipfs.bitswap_stats().await?)),
+        IpfsRequest::BitswapStats => Ok(IpfsNativeResponse::BitswapStats(ipfs.bitswap_stats().await?)),
         IpfsRequest::AddListeningAddr(addr) => {
-            Ok(IpfsResponse::AddListeningAddr(ipfs.add_listening_address(convert_addr(&addr.0)?).await?))
+            Ok(IpfsNativeResponse::AddListeningAddr(ipfs.add_listening_address(convert_addr(&addr.0)?).await?))
         },
         IpfsRequest::RemoveListeningAddr(addr) => {
-            Ok(IpfsResponse::RemoveListeningAddr(ipfs.remove_listening_address(convert_addr(&addr.0)?).await?))
+            Ok(IpfsNativeResponse::RemoveListeningAddr(ipfs.remove_listening_address(convert_addr(&addr.0)?).await?))
         },
-        IpfsRequest::GetBlock(cid) => Ok(IpfsResponse::GetBlock(ipfs.get_block(&cid.try_into()?).await?)),
+        IpfsRequest::GetBlock(cid) => Ok(IpfsNativeResponse::GetBlock(ipfs.get_block(&cid.try_into()?).await?)),
         IpfsRequest::AddFile(path) => {
-            Ok(IpfsResponse::AddFile(ipfs.add(PathBuf::from_str(str::from_utf8(&path)?)?.into()).await?))
+            Ok(IpfsNativeResponse::AddFile(ipfs.add(PathBuf::from_str(str::from_utf8(&path)?)?.into()).await?))
         },
         IpfsRequest::GetFile(path) => {
-            Ok(IpfsResponse::GetFile(ipfs.get(IpfsPath::from_str(str::from_utf8(&path)?)?).await?))
+            Ok(IpfsNativeResponse::GetFile(ipfs.get(IpfsPath::from_str(str::from_utf8(&path)?)?).await?))
         },
-        IpfsRequest::Peers => Ok(IpfsResponse::Peers(ipfs.peers().await?)),
+        IpfsRequest::Peers => Ok(IpfsNativeResponse::Peers(ipfs.peers().await?)),
     }
 }
 
@@ -426,7 +434,7 @@ mod tests {
         let id2 = api.request_start(IpfsRequest::LocalRefs).unwrap();
 
         match api.response_wait(&[id1, id2], Some(deadline)).as_slice() {
-            [IpfsRequestStatus::Finished, IpfsRequestStatus::Finished] => {},
+            [IpfsRequestStatus::Finished(_), IpfsRequestStatus::Finished(_)] => {},
             x => panic!("Connecting to the IPFS node failed: {:?}", x),
         }
     }

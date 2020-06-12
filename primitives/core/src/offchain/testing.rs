@@ -33,6 +33,7 @@ use crate::offchain::{
 	IpfsRequest,
 	IpfsRequestId,
 	IpfsRequestStatus,
+	IpfsResponse,
 	Timestamp,
 	StorageKind,
 	OpaqueNetworkState,
@@ -335,7 +336,7 @@ impl offchain::Externalities for TestOffchainExt {
 		let state = self.0.read();
 
 		ids.iter().map(|id| match state.ipfs_requests.get(id) {
-			Some(_) => IpfsRequestStatus::Finished,
+			Some(_) => IpfsRequestStatus::Finished(IpfsResponse::Success),
 			None => IpfsRequestStatus::Invalid,
 		}).collect()
 	}

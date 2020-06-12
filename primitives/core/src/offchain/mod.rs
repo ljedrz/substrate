@@ -300,6 +300,15 @@ pub enum IpfsRequest {
     Peers,
 }
 
+/// A response that can be returned from the IPFS node.
+#[derive(Clone, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
+pub enum IpfsResponse {
+    /// A request was processed successfully.
+    Success,
+    /// The list of currently connected peers.
+    Peers(Vec<OpaqueMultiaddr>),
+}
+
 /// Opaque type for offchain IPFS requests.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, RuntimeDebug, Encode, Decode, PassByInner)]
 #[cfg_attr(feature = "std", derive(Hash))]
@@ -318,7 +327,7 @@ pub enum IpfsError {
 }
 
 /// Status of the HTTP request
-#[derive(Clone, Copy, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
+#[derive(Clone, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
 pub enum IpfsRequestStatus {
 	/// Deadline was reached while we waited for this request to finish.
 	///
@@ -334,7 +343,7 @@ pub enum IpfsRequestStatus {
 	/// The passed ID is invalid in this context.
 	Invalid,
 	/// The request has finished with given status code.
-	Finished,
+	Finished(IpfsResponse),
 }
 
 /// Execution context extra capabilities.

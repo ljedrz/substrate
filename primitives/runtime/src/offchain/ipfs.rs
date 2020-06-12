@@ -16,10 +16,11 @@ use sp_std::prelude::vec;
 use sp_core::RuntimeDebug;
 use sp_core::offchain::{
 	Timestamp,
+	IpfsError,
 	IpfsRequest,
 	IpfsRequestId as RequestId,
 	IpfsRequestStatus as RequestStatus,
-	IpfsError,
+	IpfsResponse,
 };
 
 /// A struct representing an uncompleted IPFS request.
@@ -99,7 +100,7 @@ impl PendingRequest {
 				RequestStatus::DeadlineReached => Err(req),
 				RequestStatus::IoError => Ok(Err(Error::IoError)),
 				RequestStatus::Invalid => Ok(Err(Error::Unknown)),
-				RequestStatus::Finished => Ok(Ok(Response::new(req.id, 0))),
+				RequestStatus::Finished(resp) => Ok(Ok(Response::new(req.id, resp))),
 			})
 			.collect()
 	}
@@ -110,15 +111,15 @@ impl PendingRequest {
 pub struct Response {
 	/// Request id
 	pub id: RequestId,
-	/// Response status code
-	pub code: u16,
+	/// Response value
+	pub response: IpfsResponse,
 }
 
 impl Response {
-	fn new(id: RequestId, code: u16) -> Self {
+	fn new(id: RequestId, response: IpfsResponse) -> Self {
 		Self {
 			id,
-			code,
+			response,
 		}
 	}
 }
