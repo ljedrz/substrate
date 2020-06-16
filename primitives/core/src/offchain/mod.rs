@@ -303,10 +303,35 @@ pub enum IpfsRequest {
 /// A response that can be returned from the IPFS node.
 #[derive(Clone, PartialEq, Eq, RuntimeDebug, Encode, Decode, PassByCodec)]
 pub enum IpfsResponse {
-    /// A request was processed successfully.
-    Success,
+	/// A list of pairs of node's peers and their known addresses.
+	Addrs(Vec<(Vec<u8>, Vec<OpaqueMultiaddr>)>),
+	/// A collection of node stats related to the bitswap protocol.
+	BitswapStats {
+	    /// The number of blocks sent.
+	    blocks_sent: u64,
+	    /// The number of bytes sent.
+	    data_sent: u64,
+	    /// The number of blocks received.
+	    blocks_received: u64,
+        /// The number of bytes received.
+	    data_received: u64,
+	    /// The number of duplicate blocks received.
+	    dup_blks_received: u64,
+	    /// The number of duplicate bytes received.
+	    dup_data_received: u64,
+	    /// The list of peers.
+	    peers: Vec<Vec<u8>>,
+	    /// The list of wanted CIDs and their bitswap priorities.
+	    wantlist: Vec<(Vec<u8>, i32)>,
+	},
+	/// The local node's public key and the externally visible and listened to addresses.
+	Identity(Vec<u8>, Vec<OpaqueMultiaddr>),
+	/// A list of local node's externally visible and listened to addresses.
+	LocalAddrs(Vec<OpaqueMultiaddr>),
     /// The list of currently connected peers.
-    Peers(Vec<OpaqueMultiaddr>),
+	Peers(Vec<OpaqueMultiaddr>),
+	/// A request was processed successfully and there is no extra value to return.
+	Success,
 }
 
 /// Opaque type for offchain IPFS requests.

@@ -6,8 +6,8 @@ use sp_core::offchain::{Duration, IpfsRequest, IpfsResponse, OpaqueMultiaddr, Ti
 use sp_io::offchain::timestamp;
 use sp_runtime::offchain::ipfs;
 
-#[cfg(test)]
-mod tests;
+// #[cfg(test)]
+// mod tests;
 
 // an IPFS bootstrapper node that can be connected to
 #[allow(unused)]

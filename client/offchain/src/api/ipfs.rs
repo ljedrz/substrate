@@ -14,7 +14,7 @@ use futures::{prelude::*, future};
 use ipfs::{unixfs, BitswapStats, Block, Cid, Connection, IpfsPath, Multiaddr, PeerId, PublicKey, SubscriptionStream};
 use log::error;
 use sp_core::offchain::{IpfsRequest, IpfsRequestId, IpfsRequestStatus, IpfsResponse, OpaqueMultiaddr, Timestamp};
-use std::{convert::TryInto, fmt, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
+use std::{convert::TryInto, fmt, mem, path::PathBuf, pin::Pin, str::{self, FromStr}, task::{Context, Poll}};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedSender, TracingUnboundedReceiver};
 
 /// Creates a pair of [`IpfsApi`] and [`IpfsWorker`].
@@ -100,23 +100,16 @@ impl IpfsApi {
                 let mut output = Vec::with_capacity(ids.len());
                 let mut must_wait_more = false;
                 for id in ids {
-                    output.push(match self.requests.get(id) {
+                    output.push(match self.requests.get_mut(id) {
                         None => IpfsRequestStatus::Invalid,
                         Some(IpfsApiRequest::Dispatched) => {
                             must_wait_more = true;
                             IpfsRequestStatus::DeadlineReached
                         },
                         Some(IpfsApiRequest::Fail(_)) => IpfsRequestStatus::IoError,
-                        Some(IpfsApiRequest::Response(resp)) => {
-                            match resp {
-                                IpfsNativeResponse::Peers(conns) => {
-                                    let addrs = conns.into_iter().map(|conn|
-                                        OpaqueMultiaddr(conn.address.to_string().into_bytes())
-                                    ).collect();
-                                    IpfsRequestStatus::Finished(IpfsResponse::Peers(addrs))
-                                },
-                                _ => IpfsRequestStatus::Finished(IpfsResponse::Success),
-                            }
+                        Some(IpfsApiRequest::Response(ref mut resp)) => {
+                            let ret = mem::replace(resp, IpfsNativeResponse::Success);
+                            IpfsRequestStatus::Finished(IpfsResponse::from(ret))
                         },
                     });
                 }
@@ -263,6 +256,75 @@ pub enum IpfsNativeResponse {
     AddFile(Cid),
     GetFile(unixfs::File),
     Peers(Vec<Connection>),
+    // a technical placeholder replacing the actual response owned for conversion purposes.
+    Success,
+}
+
+impl From<IpfsNativeResponse> for IpfsResponse {
+    fn from(resp: IpfsNativeResponse) -> Self {
+        match resp {
+            IpfsNativeResponse::Addrs(resp) => {
+                let mut ret = Vec::with_capacity(resp.len());
+
+                for (peer_id, addrs) in resp {
+                    let peer = peer_id.as_ref().to_vec();
+                    let mut converted_addrs = Vec::with_capacity(addrs.len());
+
+                    for addr in addrs {
+                        converted_addrs.push(OpaqueMultiaddr(addr.to_string().into_bytes()));
+                    }
+
+                    ret.push((peer, converted_addrs));
+                }
+
+                IpfsResponse::Addrs(ret)
+            }
+            IpfsNativeResponse::BitswapStats(BitswapStats {
+                blocks_sent,
+                data_sent,
+                blocks_received,
+                data_received,
+                dup_blks_received,
+                dup_data_received,
+                peers,
+                wantlist,
+            }) => {
+                IpfsResponse::BitswapStats {
+                    blocks_sent,
+                    data_sent,
+                    blocks_received,
+                    data_received,
+                    dup_blks_received,
+                    dup_data_received,
+                    peers: peers.into_iter().map(|peer_id| peer_id.as_ref().to_vec()).collect(),
+                    wantlist: wantlist.into_iter().map(|(cid, prio)| (cid.to_bytes(), prio)).collect(),
+                }
+            }
+            IpfsNativeResponse::LocalAddrs(addrs) => {
+                let addrs = addrs.into_iter().map(|addr|
+                    OpaqueMultiaddr(addr.to_string().into_bytes())
+                ).collect();
+
+                IpfsResponse::LocalAddrs(addrs)
+            }
+            IpfsNativeResponse::Identity(pk, addrs) => {
+                let pk = pk.into_peer_id().as_ref().to_vec();
+                let addrs = addrs.into_iter().map(|addr|
+                    OpaqueMultiaddr(addr.to_string().into_bytes())
+                ).collect();
+
+                IpfsResponse::Identity(pk, addrs)
+            }
+            IpfsNativeResponse::Peers(conns) => {
+                let addrs = conns.into_iter().map(|conn|
+                    OpaqueMultiaddr(conn.address.to_string().into_bytes())
+                ).collect();
+
+                IpfsResponse::Peers(addrs)
+            },
+            _ => IpfsResponse::Success,
+        }
+    }
 }
 
 async fn ipfs_request<I: ipfs::IpfsTypes>(ipfs: ipfs::Ipfs<I>, request: IpfsRequest) -> Result<IpfsNativeResponse, ipfs::Error> {
