@@ -5,6 +5,7 @@ use frame_system::{self as system, ensure_signed};
 use sp_core::offchain::{Duration, IpfsRequest, IpfsResponse, OpaqueMultiaddr, Timestamp};
 use sp_io::offchain::timestamp;
 use sp_runtime::offchain::ipfs;
+use sp_std::str;
 
 // #[cfg(test)]
 // mod tests;
@@ -101,8 +102,6 @@ impl<T: Trait> Module<T> {
     }
 
     fn connection_housekeeping() -> Result<(), Error<T>> {
-        debug::info!("Commencing IPFS connection housekeeping");
-
         let mut deadline;
 
         // obtain the node's current list of connected peers
@@ -113,7 +112,10 @@ impl<T: Trait> Module<T> {
             unreachable!("can't get any other response from that request; qed");
         };
 
-        debug::info!("current IPFS peers: {:?}", current_ipfs_peers);
+        debug::info!(
+            "Current IPFS peers: {:?}",
+            current_ipfs_peers.iter().filter_map(|addr| str::from_utf8(&addr.0).ok()).collect::<Vec<&str>>()
+        );
 
         // get the list of desired connections
         let wanted_addresses = DesiredConnections::get();
