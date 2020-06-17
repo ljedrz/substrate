@@ -328,6 +328,8 @@ pub enum IpfsResponse {
 	Identity(Vec<u8>, Vec<OpaqueMultiaddr>),
 	/// A list of local node's externally visible and listened to addresses.
 	LocalAddrs(Vec<OpaqueMultiaddr>),
+	/// A list of locally available blocks by their CIDs.
+	LocalRefs(Vec<Vec<u8>>),
     /// The list of currently connected peers.
 	Peers(Vec<OpaqueMultiaddr>),
 	/// A request was processed successfully and there is no extra value to return.
@@ -367,7 +369,7 @@ pub enum IpfsRequestStatus {
 	IoError,
 	/// The passed ID is invalid in this context.
 	Invalid,
-	/// The request has finished with given status code.
+	/// The request has finished successfully.
 	Finished(IpfsResponse),
 }
 

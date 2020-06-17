@@ -95,23 +95,24 @@ impl IpfsApi {
     ) -> Vec<IpfsRequestStatus> {
         let mut deadline = timestamp::deadline_to_future(deadline);
 
+        let mut output = vec![IpfsRequestStatus::DeadlineReached; ids.len()];
         loop {
             {
-                let mut output = Vec::with_capacity(ids.len());
                 let mut must_wait_more = false;
+                let mut out_idx = 0;
                 for id in ids {
-                    output.push(match self.requests.get_mut(id) {
-                        None => IpfsRequestStatus::Invalid,
-                        Some(IpfsApiRequest::Dispatched) => {
-                            must_wait_more = true;
-                            IpfsRequestStatus::DeadlineReached
-                        },
-                        Some(IpfsApiRequest::Fail(_)) => IpfsRequestStatus::IoError,
+                    match self.requests.get_mut(id) {
+                        None => output[out_idx] = IpfsRequestStatus::Invalid,
+                        Some(IpfsApiRequest::Dispatched) => must_wait_more = true,
+                        Some(IpfsApiRequest::Fail(_)) => output[out_idx] = IpfsRequestStatus::IoError,
+                        Some(IpfsApiRequest::Response(IpfsNativeResponse::Success)) => {},
                         Some(IpfsApiRequest::Response(ref mut resp)) => {
-                            let ret = mem::replace(resp, IpfsNativeResponse::Success);
-                            IpfsRequestStatus::Finished(IpfsResponse::from(ret))
+                            output[out_idx] = IpfsRequestStatus::Finished(IpfsResponse::from(
+                                mem::replace(resp, IpfsNativeResponse::Success)
+                            ));
                         },
-                    });
+                    };
+                    out_idx += 1;
                 }
                 debug_assert_eq!(output.len(), ids.len());
 
@@ -307,6 +308,13 @@ impl From<IpfsNativeResponse> for IpfsResponse {
 
                 IpfsResponse::LocalAddrs(addrs)
             }
+            IpfsNativeResponse::LocalRefs(cids) => {
+                let cids = cids.into_iter().map(|cid|
+                    cid.to_bytes()
+                ).collect();
+
+                IpfsResponse::LocalRefs(cids)
+            }
             IpfsNativeResponse::Identity(pk, addrs) => {
                 let pk = pk.into_peer_id().as_ref().to_vec();
                 let addrs = addrs.into_iter().map(|addr|
@@ -438,9 +446,9 @@ impl fmt::Debug for IpfsWorkerRequest {
 #[cfg(test)]
 mod tests {
     use crate::api::timestamp;
-    use super::ipfs;
+    use super::*;
     use async_std::task;
-    use sp_core::offchain::{IpfsRequest, IpfsRequestStatus, Duration};
+    use sp_core::offchain::{IpfsRequest, IpfsRequestStatus, IpfsResponse, Duration};
 
     fn ipfs_node() -> ipfs::Ipfs<ipfs::TestTypes> {
         let options = ipfs::IpfsOptions::<ipfs::TestTypes>::default();
@@ -470,15 +478,24 @@ mod tests {
 
     #[test]
     fn metadata_calls() {
-        let deadline = timestamp::now().add(Duration::from_millis(10_000));
-
         let mut api = build_ipfs_node!();
 
-        let id1 = api.request_start(IpfsRequest::Identity).unwrap();
-        let id2 = api.request_start(IpfsRequest::LocalRefs).unwrap();
+        let deadline = timestamp::now().add(Duration::from_millis(10_000));
 
-        match api.response_wait(&[id1, id2], Some(deadline)).as_slice() {
-            [IpfsRequestStatus::Finished(_), IpfsRequestStatus::Finished(_)] => {},
+        let id1 = api.request_start(IpfsRequest::Addrs).unwrap();
+        let id2 = api.request_start(IpfsRequest::BitswapStats).unwrap();
+        let id3 = api.request_start(IpfsRequest::Identity).unwrap();
+        let id4 = api.request_start(IpfsRequest::LocalAddrs).unwrap();
+        let id5 = api.request_start(IpfsRequest::Peers).unwrap();
+
+        match api.response_wait(&[id1, id2, id3, id4, id5], Some(deadline)).as_slice() {
+            [
+                IpfsRequestStatus::Finished(IpfsResponse::Addrs(..)),
+                IpfsRequestStatus::Finished(IpfsResponse::BitswapStats { .. }),
+                IpfsRequestStatus::Finished(IpfsResponse::Identity(..)),
+                IpfsRequestStatus::Finished(IpfsResponse::LocalAddrs(..)),
+                IpfsRequestStatus::Finished(IpfsResponse::Peers(..)),
+            ] => {},
             x => panic!("Connecting to the IPFS node failed: {:?}", x),
         }
     }
