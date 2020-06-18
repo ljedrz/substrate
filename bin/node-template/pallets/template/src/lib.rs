@@ -94,7 +94,6 @@ impl<T: Trait> Module<T> {
     // send a request to the local IPFS node; can only be called be an off-chain worker
     fn ipfs_request(req: IpfsRequest, deadline: impl Into<Option<Timestamp>>) -> Result<IpfsResponse, Error<T>> {
         let ipfs_request = ipfs::PendingRequest::new(req).map_err(|_| Error::<T>::CantCreateRequest)?;
-        // debug::info!("IPFS request started: {:?}", ipfs_request);
         ipfs_request.try_wait(deadline)
             .map_err(|_| Error::<T>::RequestTimeout)?
             .map(|r| r.response)
@@ -119,11 +118,6 @@ impl<T: Trait> Module<T> {
             unreachable!("can't get any other response from that request; qed");
         };
 
-        debug::info!(
-            "Current IPFS peers: {:?}",
-            current_ipfs_peers.iter().filter_map(|addr| str::from_utf8(&addr.0).ok()).collect::<Vec<&str>>()
-        );
-
         // get the list of desired connections
         let wanted_addresses = DesiredConnections::get();
 
@@ -137,12 +131,31 @@ impl<T: Trait> Module<T> {
         }
 
         // disconnect from peers that are no longer desired
-        for addr in current_ipfs_peers {
+        for addr in &current_ipfs_peers {
             deadline = Some(timestamp().add(Duration::from_millis(1_000)));
 
             if !wanted_addresses.contains(&addr) {
                 let _ = Self::ipfs_request(IpfsRequest::Disconnect(addr.clone()), deadline);
             }
+        }
+
+        if wanted_addresses.len() == current_ipfs_peers.len() {
+            debug::info!(
+                "All desired IPFS connections are live; current peers: {:?}",
+                current_ipfs_peers.iter().filter_map(|addr| str::from_utf8(&addr.0).ok()).collect::<Vec<&str>>()
+            );
+        } else {
+            let missing_peers = wanted_addresses
+                .iter()
+                .filter(|addr| !current_ipfs_peers.contains(&addr))
+                .filter_map(|addr| str::from_utf8(&addr.0).ok())
+                .collect::<Vec<_>>();
+
+            debug::info!(
+                "Not all desired IPFS connections are live; current peers: {:?}, missing peers: {:?}",
+                current_ipfs_peers.iter().filter_map(|addr| str::from_utf8(&addr.0).ok()).collect::<Vec<&str>>(),
+                missing_peers
+            );
         }
 
         Ok(())
