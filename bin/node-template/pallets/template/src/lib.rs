@@ -98,7 +98,14 @@ impl<T: Trait> Module<T> {
         ipfs_request.try_wait(deadline)
             .map_err(|_| Error::<T>::RequestTimeout)?
             .map(|r| r.response)
-            .map_err(|_| Error::<T>::RequestFailed)
+            .map_err(|e| {
+                if let ipfs::Error::IoError(err) = e {
+                    debug::error!("IPFS request failed: {}", str::from_utf8(&err).unwrap());
+                } else {
+                    debug::error!("IPFS request failed: {:?}", e);
+                }
+                Error::<T>::RequestFailed
+            })
     }
 
     fn connection_housekeeping() -> Result<(), Error<T>> {
@@ -125,9 +132,7 @@ impl<T: Trait> Module<T> {
             deadline = Some(timestamp().add(Duration::from_millis(1_000)));
 
             if !current_ipfs_peers.contains(addr) {
-                if let Err(e) = Self::ipfs_request(IpfsRequest::Connect(addr.clone()), deadline) {
-                    debug::error!("Can't connect to a desired address: {:?}", e);
-                }
+                let _ = Self::ipfs_request(IpfsRequest::Connect(addr.clone()), deadline);
             }
         }
 
@@ -136,9 +141,7 @@ impl<T: Trait> Module<T> {
             deadline = Some(timestamp().add(Duration::from_millis(1_000)));
 
             if !wanted_addresses.contains(&addr) {
-                if let Err(e) = Self::ipfs_request(IpfsRequest::Disconnect(addr), deadline) {
-                    debug::error!("Can't disconnect from a no-longer desired address: {:?}", e);
-                }
+                let _ = Self::ipfs_request(IpfsRequest::Disconnect(addr.clone()), deadline);
             }
         }
 

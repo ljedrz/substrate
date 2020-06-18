@@ -104,7 +104,9 @@ impl IpfsApi {
                     match self.requests.get_mut(id) {
                         None => output[out_idx] = IpfsRequestStatus::Invalid,
                         Some(IpfsApiRequest::Dispatched) => must_wait_more = true,
-                        Some(IpfsApiRequest::Fail(_)) => output[out_idx] = IpfsRequestStatus::IoError,
+                        Some(IpfsApiRequest::Fail(e)) => {
+                            output[out_idx] = IpfsRequestStatus::IoError(e.to_string().into_bytes())
+                        },
                         Some(IpfsApiRequest::Response(IpfsNativeResponse::Success)) => {},
                         Some(IpfsApiRequest::Response(ref mut resp)) => {
                             output[out_idx] = IpfsRequestStatus::Finished(IpfsResponse::from(
@@ -127,7 +129,7 @@ impl IpfsApi {
                     // Requests in "fail" mode are purged before returning.
                     debug_assert_eq!(output.len(), ids.len());
                     for n in (0..ids.len()).rev() {
-                        if let IpfsRequestStatus::IoError = output[n] {
+                        if let IpfsRequestStatus::IoError(_) = output[n] {
                             self.requests.remove(&ids[n]);
                         }
                     }
@@ -168,7 +170,7 @@ impl IpfsApi {
 
                 None => {
                     error!("Worker has crashed");
-                    return ids.iter().map(|_| IpfsRequestStatus::IoError).collect()
+                    return ids.iter().map(|_| IpfsRequestStatus::IoError(b"The IPFS worker has crashed!".to_vec())).collect()
                 }
             }
         }

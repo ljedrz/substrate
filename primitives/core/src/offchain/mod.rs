@@ -366,7 +366,7 @@ pub enum IpfsRequestStatus {
 	///
 	/// The request is now considered destroyed. To retry the request you need
 	/// to construct it again.
-	IoError,
+	IoError(Vec<u8>),
 	/// The passed ID is invalid in this context.
 	Invalid,
 	/// The request has finished successfully.

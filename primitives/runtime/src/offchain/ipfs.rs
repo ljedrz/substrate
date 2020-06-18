@@ -65,7 +65,7 @@ pub enum Error {
 	/// Deadline has been reached.
 	DeadlineReached,
 	/// Request had timed out.
-	IoError,
+	IoError(Vec<u8>),
 	/// Unknown error has been encountered.
 	Unknown,
 }
@@ -116,7 +116,7 @@ impl PendingRequest {
 			.zip(requests.into_iter())
 			.map(|(status, req)| match status {
 				RequestStatus::DeadlineReached => Err(req),
-				RequestStatus::IoError => Ok(Err(Error::IoError)),
+				RequestStatus::IoError(e) => Ok(Err(Error::IoError(e))),
 				RequestStatus::Invalid => Ok(Err(Error::Unknown)),
 				RequestStatus::Finished(resp) => Ok(Ok(Response::new(req.id, resp))),
 			})
