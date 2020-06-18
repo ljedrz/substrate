@@ -391,33 +391,24 @@ impl<I: ipfs::IpfsTypes> Future for IpfsWorker<I> {
         // We remove each element from `requests` one by one and add them back only if necessary.
         for n in (0..me.requests.len()).rev() {
             let (id, mut request) = me.requests.swap_remove(n);
-            let response = match Future::poll(Pin::new(&mut request.0), cx) {
-                Poll::Pending => {
-                    me.requests.push((id, request));
-                    continue
+            match Future::poll(Pin::new(&mut request.0), cx) {
+                Poll::Pending => me.requests.push((id, request)),
+                Poll::Ready(Ok(value)) => {
+                    let _ = me.to_api.unbounded_send(WorkerToApi::Response { id, value });
+                    cx.waker().wake_by_ref();   // reschedule in order to poll the new future
                 },
-                Poll::Ready(Ok(response)) => response,
                 Poll::Ready(Err(error)) => {
 					let _ = me.to_api.unbounded_send(WorkerToApi::Fail { id, error });
-					continue;		// don't insert the request back
 				}
             };
-
-			let _ = me.to_api.unbounded_send(WorkerToApi::Response {
-				id,
-				value: response,
-			});
-
-            cx.waker().wake_by_ref();   // reschedule in order to poll the new future
         }
-
-        let ipfs_node = me.ipfs_node.clone();
 
         // Check for messages coming from the [`IpfsApi`].
         match Stream::poll_next(Pin::new(&mut me.from_api), cx) {
             Poll::Pending => {},
             Poll::Ready(None) => return Poll::Ready(()),    // stops the worker
             Poll::Ready(Some(ApiToWorker { id, request })) => {
+                let ipfs_node = me.ipfs_node.clone();
                 let future = Box::pin(ipfs_request(ipfs_node, request));
                 debug_assert!(me.requests.iter().all(|(i, _)| *i != id));
                 me.requests.push((id, IpfsWorkerRequest(future)));
