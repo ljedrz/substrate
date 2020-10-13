@@ -92,10 +92,10 @@ impl<Client, Storage, Block: traits::Block> OffchainWorkers<Client, Storage, Blo
 	pub fn new(client: Arc<Client>, db: Storage, ipfs_rt: &mut tokio::runtime::Runtime) -> Self {
 		let shared_client = SharedClient::new();
 
-		let options = ipfs::IpfsOptions::default();
+		let options = ipfs::IpfsOptions::inmemory_with_generated_keys();
 		let (ipfs_node, node_info) = ipfs_rt.block_on(async move {
 			// Start daemon and initialize repo
-			let (ipfs, fut) = ipfs::UninitializedIpfs::new(options, None).await.start().await.unwrap();
+			let (ipfs, fut) = ipfs::UninitializedIpfs::new(options).start().await.unwrap();
 			tokio::task::spawn(fut);
 			let node_info = ipfs.identity().await.unwrap();
 			(ipfs, node_info)

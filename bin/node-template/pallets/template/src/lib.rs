@@ -80,7 +80,7 @@ decl_module! {
             ConnectionQueue::kill();
             DhtQueue::kill();
 
-            if block_number % 2.into() == 1.into() {
+            if block_number % 2u32.into() == 1u32.into() {
                 DataQueue::kill();
             }
 
@@ -159,14 +159,14 @@ decl_module! {
             }
 
             // process Ipfs::{add, get} queues every other block
-            if block_number % 2.into() == 1.into() {
+            if block_number % 2u32.into() == 1u32.into() {
                 if let Err(e) = Self::handle_data_requests() {
                     debug::error!("IPFS: Encountered an error while processing data requests: {:?}", e);
                 }
             }
 
             // display some stats every 5 blocks
-            if block_number % 5.into() == 0.into() {
+            if block_number % 5u32.into() == 0u32.into() {
                 if let Err(e) = Self::print_metadata() {
                     debug::error!("IPFS: Encountered an error while obtaining metadata: {:?}", e);
                 }
